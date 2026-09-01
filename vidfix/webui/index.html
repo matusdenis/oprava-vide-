@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oprava videa poškodeného ransomvérom</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="logo">▶</div>
+  <div>
+    <h1>Oprava videa</h1>
+    <p class="podnadpis">Záchrana videí zašifrovaných ransomvérom — bez potreby zdravého súboru</p>
+  </div>
+  <div class="stav-nastroje" id="stavNastroje"></div>
+</header>
+
+<nav class="zalozky">
+  <button class="zalozka aktivna" data-panel="panel-subor">1 · Súbor</button>
+  <button class="zalozka" data-panel="panel-analyza">2 · Analýza</button>
+  <button class="zalozka" data-panel="panel-oprava">3 · Oprava</button>
+  <button class="zalozka" data-panel="panel-databaza">Databáza hlavičiek</button>
+  <button class="zalozka" data-panel="panel-nastroje">Nástroje</button>
+</nav>
+
+<main>
+  <!-- 1. SÚBOR -->
+  <section id="panel-subor" class="panel aktivny">
+    <h2>Vyber poškodený súbor</h2>
+    <p class="popis">Program pôvodný súbor <strong>nikdy nemení</strong> — všetko zapisuje do nového.</p>
+    <div class="riadok">
+      <input type="text" id="cestaVstup" placeholder="/cesta/k/priecinku" spellcheck="false">
+      <button id="btnPrejst">Prejsť</button>
+    </div>
+    <div id="disky" class="disky"></div>
+    <div id="prehliadac" class="prehliadac"></div>
+    <div id="vybranySubor" class="vybrany skryty"></div>
+  </section>
+
+  <!-- 2. ANALÝZA -->
+  <section id="panel-analyza" class="panel">
+    <h2>Analýza súboru</h2>
+    <div id="analyzaObsah"><p class="popis">Najprv vyber súbor v kroku 1.</p></div>
+  </section>
+
+  <!-- 3. OPRAVA -->
+  <section id="panel-oprava" class="panel">
+    <h2>Oprava</h2>
+    <div id="opravaObsah"><p class="popis">Najprv spusti analýzu v kroku 2.</p></div>
+  </section>
+
+  <!-- DATABÁZA -->
+  <section id="panel-databaza" class="panel">
+    <h2>Databáza hlavičiek</h2>
+    <p class="popis">Hlavičky sú poskladané podľa verejných špecifikácií (ISO/IEC 14496-12,
+      QuickTime File Format, register MP4RA). Ak máš k dispozícii hoci len jeden zdravý
+      súbor z rovnakého zariadenia, pridaj si jeho hlavičku — bude najpresnejšia.</p>
+    <div class="riadok">
+      <input type="text" id="vzorHlavicka" placeholder="cesta k zdravému MP4/MOV súboru" spellcheck="false">
+      <input type="text" id="nazovHlavicka" placeholder="názov (napr. iPhone 13, 4K)">
+      <button id="btnPridatHlavicku">Pridať hlavičku zo súboru</button>
+    </div>
+    <div id="databazaObsah"></div>
+  </section>
+
+  <!-- NÁSTROJE -->
+  <section id="panel-nastroje" class="panel">
+    <h2>Externé nástroje</h2>
+    <p class="popis">ffmpeg je potrebný. untrunc je voliteľný — používa sa len pri jednej
+      zo stratégií.</p>
+    <div id="nastrojeObsah"></div>
+  </section>
+</main>
+
+<div id="hlaska" class="hlaska skryty"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

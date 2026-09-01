@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+# vlastne hlavicky a nastavenia pouzivatela
+data/headers_user.json
+data/nastavenia.json
+# externe nastroje, ak si ich niekto skopiruje vedla programu
+bin/
+nastroje/ffmpeg*
+nastroje/untrunc*
+# vysledky opravy
+opravene/

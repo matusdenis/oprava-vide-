@@ -1,0 +1,105 @@
+:root{
+  --pozadie:#12151c; --panel:#1a1f2b; --panel2:#232a39; --text:#e6eaf2;
+  --tlmene:#98a4bb; --ciara:#2e3648; --akcent:#4da3ff; --akcent2:#2b7fd4;
+  --dobre:#3fbf6f; --pozor:#e6a23c; --zle:#e35b5b;
+}
+@media (prefers-color-scheme: light){
+  :root{--pozadie:#f2f4f8;--panel:#fff;--panel2:#eef1f6;--text:#1b2030;
+        --tlmene:#5c6880;--ciara:#d8dee9;}
+}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.55 -apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif;
+  background:var(--pozadie);color:var(--text)}
+header{display:flex;align-items:center;gap:14px;padding:14px 20px;background:var(--panel);
+  border-bottom:1px solid var(--ciara)}
+.logo{width:38px;height:38px;border-radius:9px;background:linear-gradient(135deg,var(--akcent),var(--akcent2));
+  display:grid;place-items:center;color:#fff;font-size:18px}
+h1{font-size:17px;margin:0}
+h2{font-size:16px;margin:0 0 6px}
+h3{font-size:14px;margin:18px 0 6px}
+.podnadpis{margin:0;color:var(--tlmene);font-size:12.5px}
+.stav-nastroje{margin-left:auto;font-size:12px;color:var(--tlmene);text-align:right}
+.zalozky{display:flex;gap:4px;padding:0 16px;background:var(--panel);
+  border-bottom:1px solid var(--ciara);overflow-x:auto}
+.zalozka{background:none;border:0;border-bottom:2px solid transparent;color:var(--tlmene);
+  padding:10px 14px;cursor:pointer;font-size:13.5px;white-space:nowrap}
+.zalozka:hover{color:var(--text)}
+.zalozka.aktivna{color:var(--akcent);border-bottom-color:var(--akcent)}
+main{padding:20px;max-width:1150px;margin:0 auto}
+.panel{display:none}
+.panel.aktivny{display:block}
+.popis{color:var(--tlmene);margin:4px 0 14px}
+.riadok{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+input[type=text],input[type=number],select{background:var(--panel2);border:1px solid var(--ciara);
+  color:var(--text);padding:8px 10px;border-radius:7px;flex:1;min-width:150px;font-size:13.5px}
+button{background:var(--akcent);color:#fff;border:0;padding:8px 15px;border-radius:7px;
+  cursor:pointer;font-size:13.5px;font-weight:500}
+button:hover{background:var(--akcent2)}
+button.tichy{background:var(--panel2);color:var(--text);border:1px solid var(--ciara)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.disky{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.disky button{background:var(--panel2);color:var(--text);border:1px solid var(--ciara);
+  padding:5px 11px;font-size:12.5px}
+.prehliadac{background:var(--panel);border:1px solid var(--ciara);border-radius:9px;
+  max-height:390px;overflow:auto}
+.polozka{display:flex;gap:10px;padding:7px 13px;cursor:pointer;border-bottom:1px solid var(--ciara);
+  align-items:center}
+.polozka:last-child{border-bottom:0}
+.polozka:hover{background:var(--panel2)}
+.polozka .ikona{width:18px;text-align:center;opacity:.8}
+.polozka .velkost{margin-left:auto;color:var(--tlmene);font-size:12px}
+.polozka.video{color:var(--akcent)}
+.vybrany{background:var(--panel);border:1px solid var(--akcent);border-radius:9px;
+  padding:14px;margin-top:14px}
+.skryty{display:none}
+.karta{background:var(--panel);border:1px solid var(--ciara);border-radius:9px;
+  padding:14px 16px;margin-bottom:12px}
+.karta.zvyraznena{border-color:var(--akcent)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--ciara);vertical-align:top}
+th{color:var(--tlmene);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+tr:last-child td{border-bottom:0}
+.znacka{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11.5px;font-weight:600}
+.znacka.dobra{background:rgba(63,191,111,.16);color:var(--dobre)}
+.znacka.pozor{background:rgba(230,162,60,.16);color:var(--pozor)}
+.znacka.zla{background:rgba(227,91,91,.16);color:var(--zle)}
+pre{background:var(--panel2);border:1px solid var(--ciara);border-radius:7px;padding:10px 12px;
+  overflow:auto;font-size:12px;line-height:1.45;margin:8px 0;
+  font-family:"SF Mono",Menlo,Consolas,monospace}
+.log{max-height:330px;overflow:auto;white-space:pre-wrap}
+.graf{display:flex;align-items:flex-end;gap:1px;height:64px;background:var(--panel2);
+  border-radius:7px;padding:6px;overflow:hidden}
+.graf div{flex:1;background:var(--akcent);border-radius:1px;min-width:1px}
+.graf div.sifrovane{background:var(--zle)}
+.legenda{display:flex;gap:16px;font-size:11.5px;color:var(--tlmene);margin-top:6px}
+.legenda i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+.strategia{border:1px solid var(--ciara);border-radius:9px;padding:12px 14px;margin-bottom:9px;
+  cursor:pointer;background:var(--panel)}
+.strategia:hover{border-color:var(--akcent)}
+.strategia.vybrana{border-color:var(--akcent);background:var(--panel2)}
+.strategia h4{margin:0 0 4px;font-size:14px;display:flex;align-items:center;gap:9px}
+.strategia p{margin:4px 0 0;color:var(--tlmene);font-size:12.5px}
+.volby{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0}
+.volba{background:var(--panel2);border:1px solid var(--ciara);border-radius:7px;padding:9px 11px}
+.volba label{display:block;font-size:12px;color:var(--tlmene);margin-bottom:5px}
+.vysledok{border-left:3px solid var(--dobre);background:var(--panel2);padding:11px 14px;
+  border-radius:0 7px 7px 0;margin:9px 0}
+.vysledok.zly{border-left-color:var(--zle)}
+.subor-vystup{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--ciara)}
+.subor-vystup:last-child{border-bottom:0}
+.subor-vystup code{font-size:12px;word-break:break-all}
+.nahlad{max-width:290px;border-radius:7px;border:1px solid var(--ciara);margin-top:9px;display:block}
+.hlaska{position:fixed;right:18px;bottom:18px;background:var(--panel);border:1px solid var(--akcent);
+  border-radius:9px;padding:11px 16px;box-shadow:0 8px 26px rgba(0,0,0,.35);max-width:420px;z-index:9}
+.hlaska.zla{border-color:var(--zle)}
+.spinner{display:inline-block;width:13px;height:13px;border:2px solid var(--ciara);
+  border-top-color:var(--akcent);border-radius:50%;animation:tocit .8s linear infinite;
+  vertical-align:-2px;margin-right:7px}
+@keyframes tocit{to{transform:rotate(360deg)}}
+.mriezka{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.udaj{background:var(--panel2);border-radius:7px;padding:9px 11px}
+.udaj b{display:block;font-size:11px;color:var(--tlmene);font-weight:500;text-transform:uppercase;
+  letter-spacing:.03em;margin-bottom:3px}
+.udaj span{font-size:14.5px}
+a{color:var(--akcent)}
+details summary{cursor:pointer;color:var(--tlmene);font-size:13px;padding:4px 0}

@@ -1,0 +1,587 @@
+{
+  "verzia": "1.0",
+  "aktualizovane": "2026-09-01",
+  "popis": "Databaza hlaviciek kontajnerov zostavena z verejnych specifikacii a registrov. Bajty boxov ftyp su poskladane programovo podla ISO/IEC 14496-12, takze su zarucene platne.",
+  "zdroje": [
+    {
+      "id": "mp4ra",
+      "nazov": "MP4RA - register znaciek a typov boxov",
+      "url": "https://mp4ra.org/registered-types/brands",
+      "popis": "Oficialny register znaciek (brands) a typov boxov pre ISO BMFF."
+    },
+    {
+      "id": "iso14496-12",
+      "nazov": "ISO/IEC 14496-12 (ISO Base Media File Format)",
+      "url": "https://www.iso.org/standard/83102.html",
+      "popis": "Norma popisujuca strukturu boxov MP4/MOV vratane ftyp, moov, mdat."
+    },
+    {
+      "id": "qtff",
+      "nazov": "Apple QuickTime File Format Specification",
+      "url": "https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/",
+      "popis": "Popis atomov QuickTime (.mov), z ktorych MP4 vychadza."
+    },
+    {
+      "id": "matroska",
+      "nazov": "Matroska / WebM specifikacia",
+      "url": "https://www.matroska.org/technical/elements.html",
+      "popis": "EBML elementy kontajnera MKV/WebM."
+    },
+    {
+      "id": "riff-avi",
+      "nazov": "OpenDML AVI / RIFF specifikacia",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/directshow/avi-riff-file-reference",
+      "popis": "Struktura RIFF/AVI vratane hdrl, movi a idx1."
+    },
+    {
+      "id": "mpegts",
+      "nazov": "ISO/IEC 13818-1 (MPEG-2 Transport Stream)",
+      "url": "https://www.iso.org/standard/75928.html",
+      "popis": "Paketovy format TS/M2TS - 188 B pakety so synchronizacnym bajtom 0x47."
+    },
+    {
+      "id": "sigs",
+      "nazov": "Verejne zoznamy signatur suborov",
+      "url": "https://en.wikipedia.org/wiki/List_of_file_signatures",
+      "popis": "Prehlad magickych bajtov na zaciatku suborov (aj Gary Kessler File Signature Table)."
+    },
+    {
+      "id": "nomoreransom",
+      "nazov": "No More Ransom",
+      "url": "https://www.nomoreransom.org/",
+      "popis": "Verejny projekt europolu - identifikacia ransomveru a dostupne desifrovace."
+    },
+    {
+      "id": "idransomware",
+      "nazov": "ID Ransomware",
+      "url": "https://id-ransomware.malwarehunterteam.com/",
+      "popis": "Sluzba na urcenie rodiny ransomveru podla pripony a vykupneho listu."
+    }
+  ],
+  "kontajnery": [
+    {
+      "id": "mp4",
+      "nazov": "MP4 / MOV (ISO Base Media)",
+      "pripony": [
+        ".mp4",
+        ".mov",
+        ".m4v",
+        ".3gp",
+        ".m4a",
+        ".mp4v"
+      ],
+      "podpisy": [
+        {
+          "offset": 4,
+          "hex": "66747970",
+          "popis": "'ftyp' na offsete 4"
+        },
+        {
+          "offset": 4,
+          "hex": "6d6f6f76",
+          "popis": "'moov' - index"
+        },
+        {
+          "offset": 4,
+          "hex": "6d646174",
+          "popis": "'mdat' - media data"
+        }
+      ],
+      "index": "moov",
+      "index_na_konci": true,
+      "poznamka": "Kamery, telefony a drony zapisuju index moov az na koniec suboru. Ak ransomver zasifroval len zaciatok, index prezije a subor sa da opravit uplne bez zdraveho vzoru.",
+      "zdroj": "iso14496-12"
+    },
+    {
+      "id": "mpegts",
+      "nazov": "MPEG-TS / M2TS / AVCHD",
+      "pripony": [
+        ".ts",
+        ".m2ts",
+        ".mts",
+        ".m2t"
+      ],
+      "podpisy": [
+        {
+          "offset": 0,
+          "hex": "47",
+          "popis": "synchronizacny bajt 0x47 kazdych 188 B"
+        },
+        {
+          "offset": 4,
+          "hex": "47",
+          "popis": "M2TS - 4 B casova znacka + 188 B paket"
+        }
+      ],
+      "index": "ziadny",
+      "index_na_konci": false,
+      "poznamka": "Format sa synchronizuje sam - staci zahodit poskodeny zaciatok a nacitat od prveho platneho paketu. Uspesnost byva takmer 100 %.",
+      "zdroj": "mpegts"
+    },
+    {
+      "id": "avi",
+      "nazov": "AVI (RIFF)",
+      "pripony": [
+        ".avi"
+      ],
+      "podpisy": [
+        {
+          "offset": 0,
+          "hex": "52494646",
+          "popis": "'RIFF'"
+        },
+        {
+          "offset": 8,
+          "hex": "41564920",
+          "popis": "'AVI '"
+        }
+      ],
+      "index": "idx1",
+      "index_na_konci": true,
+      "poznamka": "Hlavicka hdrl je na zaciatku (byva zasifrovana), ale index idx1 na konci prezije a offsety v nom su relativne voci zoznamu movi.",
+      "zdroj": "riff-avi"
+    },
+    {
+      "id": "matroska",
+      "nazov": "Matroska / WebM",
+      "pripony": [
+        ".mkv",
+        ".webm"
+      ],
+      "podpisy": [
+        {
+          "offset": 0,
+          "hex": "1a45dfa3",
+          "popis": "EBML hlavicka"
+        }
+      ],
+      "index": "Cues",
+      "index_na_konci": true,
+      "poznamka": "Zaciatok obsahuje EBML hlavicku a popis stop (CodecPrivate). Ak je zasifrovany, treba vyrezat surovy stream z Clusterov.",
+      "zdroj": "matroska"
+    },
+    {
+      "id": "asf",
+      "nazov": "ASF / WMV",
+      "pripony": [
+        ".wmv",
+        ".asf"
+      ],
+      "podpisy": [
+        {
+          "offset": 0,
+          "hex": "3026b2758e66cf11a6d900aa0062ce6c",
+          "popis": "ASF Header Object GUID"
+        }
+      ],
+      "index": "Index Object",
+      "index_na_konci": true,
+      "poznamka": "Hlavicka na zaciatku, index na konci.",
+      "zdroj": "sigs"
+    },
+    {
+      "id": "flv",
+      "nazov": "Flash Video",
+      "pripony": [
+        ".flv"
+      ],
+      "podpisy": [
+        {
+          "offset": 0,
+          "hex": "464c5601",
+          "popis": "'FLV' + verzia"
+        }
+      ],
+      "index": "onMetaData",
+      "index_na_konci": false,
+      "poznamka": "Samosynchronizujuce tagy - da sa nacitat od prveho platneho tagu.",
+      "zdroj": "sigs"
+    },
+    {
+      "id": "mpegps",
+      "nazov": "MPEG Program Stream (VOB, MPG)",
+      "pripony": [
+        ".mpg",
+        ".mpeg",
+        ".vob"
+      ],
+      "podpisy": [
+        {
+          "offset": 0,
+          "hex": "000001ba",
+          "popis": "Pack header"
+        }
+      ],
+      "index": "ziadny",
+      "index_na_konci": false,
+      "poznamka": "Samosynchronizujuci sa format - staci najst prvy platny pack header.",
+      "zdroj": "sigs"
+    }
+  ],
+  "ftyp_znacky": [
+    {
+      "znacka": "isom",
+      "popis": "Zakladna znacka ISO Base Media File Format (najvseobecnejsia).",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "iso2",
+      "popis": "ISO BMFF druhej generacie, bezna vo vystupe ffmpeg.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "iso4",
+      "popis": "ISO BMFF, verzia 4.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "iso5",
+      "popis": "ISO BMFF, verzia 5.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "iso6",
+      "popis": "ISO BMFF, verzia 6 (casto fragmentovane MP4).",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "mp41",
+      "popis": "MPEG-4 verzia 1.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "mp42",
+      "popis": "MPEG-4 verzia 2 - najbeznejsia pre kamery a telefony.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "avc1",
+      "popis": "MP4 s videom H.264/AVC.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "mmp4",
+      "popis": "Mobilny MP4 profil.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "M4V ",
+      "popis": "Video pre Apple iTunes/QuickTime.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "M4A ",
+      "popis": "Zvuk pre Apple iTunes.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "qt  ",
+      "popis": "Apple QuickTime (.mov) - pouzivaju aj mnohe fotoaparaty.",
+      "zdroj": "qtff"
+    },
+    {
+      "znacka": "3gp4",
+      "popis": "3GPP, verzia 4 (starsie telefony).",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "3gp5",
+      "popis": "3GPP, verzia 5.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "3gp6",
+      "popis": "3GPP, verzia 6.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "3g2a",
+      "popis": "3GPP2.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "MSNV",
+      "popis": "Profil pouzivany zariadeniami Sony (napr. Handycam, PSP).",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "dash",
+      "popis": "Fragmentovane MP4 pre streamovanie MPEG-DASH.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "msdh",
+      "popis": "Fragmentovane MP4, segment DASH.",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "hvc1",
+      "popis": "MP4 s videom H.265/HEVC (uzavrete GOP).",
+      "zdroj": "mp4ra"
+    },
+    {
+      "znacka": "heic",
+      "popis": "Obrazovy format HEIF (rovnaka struktura boxov).",
+      "zdroj": "mp4ra"
+    }
+  ],
+  "hlavicky": [
+    {
+      "id": "mp4_isom_univerzalny",
+      "kontajner": "mp4",
+      "popis": "Univerzalna hlavicka MP4 - presne taku zapisuje ffmpeg.",
+      "hex": "000000206674797069736f6d0000020069736f6d69736f32617663316d703431",
+      "dlzka": 32,
+      "major_brand": "isom",
+      "minor_version": 512,
+      "compatible_brands": [
+        "isom",
+        "iso2",
+        "avc1",
+        "mp41"
+      ],
+      "pouzitie": "Prvá volba pre H.264 vo vacsine pripadov.",
+      "zdroj": "iso14496-12"
+    },
+    {
+      "id": "mp4_mp42_kamery",
+      "kontajner": "mp4",
+      "popis": "Hlavicka bezna pre videa z telefonov a fotoaparatov.",
+      "hex": "0000001c667479706d703432000000006d70343269736f6d61766331",
+      "dlzka": 28,
+      "major_brand": "mp42",
+      "minor_version": 0,
+      "compatible_brands": [
+        "mp42",
+        "isom",
+        "avc1"
+      ],
+      "pouzitie": "Ked bol povodny subor z mobilu alebo fotoaparatu.",
+      "zdroj": "iso14496-12"
+    },
+    {
+      "id": "mp4_hevc",
+      "kontajner": "mp4",
+      "popis": "MP4 s videom H.265/HEVC.",
+      "hex": "000000206674797069736f6d0000020069736f6d69736f32687663316d703431",
+      "dlzka": 32,
+      "major_brand": "isom",
+      "minor_version": 512,
+      "compatible_brands": [
+        "isom",
+        "iso2",
+        "hvc1",
+        "mp41"
+      ],
+      "pouzitie": "Ked stopa pouziva kodek hvc1/hev1 (novsie iPhony, drony, 4K kamery).",
+      "zdroj": "iso14496-12"
+    },
+    {
+      "id": "mov_quicktime",
+      "kontajner": "mov",
+      "popis": "QuickTime .mov - Apple, Canon, Nikon, Blackmagic.",
+      "hex": "0000001466747970717420200000020071742020",
+      "dlzka": 20,
+      "major_brand": "qt  ",
+      "minor_version": 512,
+      "compatible_brands": [
+        "qt  "
+      ],
+      "pouzitie": "Ked povodny subor mal priponu .mov.",
+      "zdroj": "iso14496-12"
+    },
+    {
+      "id": "mp4_3gp5_telefon",
+      "kontajner": "3gp",
+      "popis": "Starsie mobilne video 3GPP.",
+      "hex": "0000001c6674797033677035000002003367703569736f6d33677034",
+      "dlzka": 28,
+      "major_brand": "3gp5",
+      "minor_version": 512,
+      "compatible_brands": [
+        "3gp5",
+        "isom",
+        "3gp4"
+      ],
+      "pouzitie": "Subory .3gp zo starsich telefonov.",
+      "zdroj": "iso14496-12"
+    },
+    {
+      "id": "mp4_sony_msnv",
+      "kontajner": "mp4",
+      "popis": "Profil zariadeni Sony.",
+      "hex": "0000001c667479704d534e56000001214d534e566d70343269736f6d",
+      "dlzka": 28,
+      "major_brand": "MSNV",
+      "minor_version": 289,
+      "compatible_brands": [
+        "MSNV",
+        "mp42",
+        "isom"
+      ],
+      "pouzitie": "Videa z kamier a telefonov Sony.",
+      "zdroj": "iso14496-12"
+    },
+    {
+      "id": "mp4_dash_fragmentovany",
+      "kontajner": "mp4",
+      "popis": "Fragmentovane MP4 (moof/mdat).",
+      "hex": "000000286674797069736f360000020069736f3669736f6d69736f32617663316d70343164617368",
+      "dlzka": 40,
+      "major_brand": "iso6",
+      "minor_version": 512,
+      "compatible_brands": [
+        "iso6",
+        "isom",
+        "iso2",
+        "avc1",
+        "mp41",
+        "dash"
+      ],
+      "pouzitie": "Ked subor obsahuje boxy moof namiesto jedneho moov.",
+      "zdroj": "iso14496-12"
+    },
+    {
+      "id": "m4v_apple",
+      "kontajner": "m4v",
+      "popis": "Apple M4V.",
+      "hex": "00000020667479704d345620000000014d3456204d3441206d70343269736f6d",
+      "dlzka": 32,
+      "major_brand": "M4V ",
+      "minor_version": 1,
+      "compatible_brands": [
+        "M4V ",
+        "M4A ",
+        "mp42",
+        "isom"
+      ],
+      "pouzitie": "Subory .m4v.",
+      "zdroj": "iso14496-12"
+    }
+  ],
+  "zariadenia": [
+    {
+      "id": "iphone_mov",
+      "vyrobca": "Apple",
+      "popis": "iPhone / iPad, subory .MOV",
+      "kontajner": "mov",
+      "sablona": "mov_quicktime",
+      "kodek": "h264 alebo hevc",
+      "spolahlivost": "orientacne"
+    },
+    {
+      "id": "android_mp4",
+      "vyrobca": "Android (vseobecne)",
+      "popis": "Telefony s Androidom",
+      "kontajner": "mp4",
+      "sablona": "mp4_mp42_kamery",
+      "kodek": "h264",
+      "spolahlivost": "orientacne"
+    },
+    {
+      "id": "gopro_mp4",
+      "vyrobca": "GoPro",
+      "popis": "Akcne kamery GoPro",
+      "kontajner": "mp4",
+      "sablona": "mp4_isom_univerzalny",
+      "kodek": "h264 alebo hevc",
+      "spolahlivost": "orientacne"
+    },
+    {
+      "id": "dji_mp4",
+      "vyrobca": "DJI",
+      "popis": "Drony a gimbaly DJI",
+      "kontajner": "mp4",
+      "sablona": "mp4_isom_univerzalny",
+      "kodek": "h264 alebo hevc",
+      "spolahlivost": "orientacne"
+    },
+    {
+      "id": "sony_mp4",
+      "vyrobca": "Sony",
+      "popis": "Fotoaparaty a kamery Sony",
+      "kontajner": "mp4",
+      "sablona": "mp4_sony_msnv",
+      "kodek": "h264",
+      "spolahlivost": "orientacne"
+    },
+    {
+      "id": "canon_mov",
+      "vyrobca": "Canon",
+      "popis": "Zrkadlovky a bezzrkadlovky Canon",
+      "kontajner": "mov",
+      "sablona": "mov_quicktime",
+      "kodek": "h264 alebo hevc",
+      "spolahlivost": "orientacne"
+    },
+    {
+      "id": "avchd_kamera",
+      "vyrobca": "Panasonic / Sony / Canon",
+      "popis": "AVCHD kamery (.MTS/.M2TS)",
+      "kontajner": "mpegts",
+      "sablona": null,
+      "kodek": "h264",
+      "spolahlivost": "orientacne"
+    }
+  ],
+  "ransomver": {
+    "poznamka": "Program hranicu poskodenia najprv MERIA priamo v subore (overuje platnost NAL jednotiek podla tabuliek stsc/stsz). Tieto hodnoty su len zalozne kandidatske dlzky, ked sa merat neda.",
+    "kandidatske_dlzky": [
+      4096,
+      8192,
+      16384,
+      32768,
+      65536,
+      131072,
+      150000,
+      262144,
+      393216,
+      524288,
+      1048576,
+      1572864,
+      2097152,
+      3145728,
+      4194304,
+      5242880,
+      8388608,
+      10485760
+    ],
+    "vzory": [
+      {
+        "id": "prefix",
+        "nazov": "Sifrovanie zaciatku suboru",
+        "popis": "Najbeznejsi pristup pri velkych suboroch - zasifruje sa len prvych N bajtov (typicky 64 KiB az niekolko MiB), aby bolo sifrovanie rychle.",
+        "dosledok": "Index moov na konci suboru prezije - oprava byva uplna.",
+        "zdroj": "nomoreransom"
+      },
+      {
+        "id": "intermitentne",
+        "nazov": "Skakave (intermitentne) sifrovanie",
+        "popis": "Sifruje sa kazdy N-ty blok, medzi nimi ostavaju povodne data.",
+        "dosledok": "Poskodenie nie je suvisle. Program zostavi mapu poskodenych usekov a oznaci casy, ktore sa neda zachranit.",
+        "zdroj": "idransomware"
+      },
+      {
+        "id": "percentualne",
+        "nazov": "Percentualne sifrovanie",
+        "popis": "Zasifruje sa urcite percento suboru od zaciatku (napr. 10 %).",
+        "dosledok": "Rovnaky postup ako pri sifrovani zaciatku, len je hranica vacsia.",
+        "zdroj": "idransomware"
+      },
+      {
+        "id": "cely_subor",
+        "nazov": "Sifrovanie celeho suboru",
+        "popis": "Cely obsah je zasifrovany, subor nema ziadnu neporusenu cast.",
+        "dosledok": "Data sa bez desifrovacieho kluca zachranit neda. Skus vyhladat priponu na No More Ransom - pre niektore rodiny existuje desifrovac.",
+        "zdroj": "nomoreransom"
+      },
+      {
+        "id": "znacka_na_konci",
+        "nazov": "Pripojena znacka na konci suboru",
+        "popis": "Mnohy ransomver pripaja na koniec suboru vlastnu hlavicku s ID obete alebo zasifrovanym klucom.",
+        "dosledok": "Program tieto bajty najde a pri oprave ich ignoruje.",
+        "zdroj": "idransomware"
+      }
+    ]
+  }
+}
