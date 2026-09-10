@@ -99,7 +99,7 @@ Užitočné prepínače príkazu `oprav`:
 |---|---|
 | `-o PRIEČINOK` | kam uložiť výsledky (predvolene `opravene/` vedľa súboru) |
 | `-s STRATÉGIA` | `mp4_graft`, `mp4_carve`, `ts_resync`, `untrunc`, `ffmpeg_remux` |
-| `--sirka`, `--vyska` | rozlíšenie pôvodného videa — ak ho poznáš, hľadanie parametrov je rádovo rýchlejšie |
+| `--sirka`, `--vyska` | rozlíšenie pôvodného videa — ak ho poznáš, hľadanie parametrov je rádovo rýchlejšie (v rozhraní sú na to prednastavené tlačidlá: 4K, 2.7K, Full HD, zvislé…) |
 | `--vzor SÚBOR` | zdravý súbor z rovnakého zariadenia (aj úplne iné, krátke video) |
 | `--dokladne` | dôkladnejšie (a pomalšie) hľadanie parametrov obrazu |
 | `--bez-orezania` | nevyrábať čistú verziu bez poškodeného začiatku |
@@ -187,6 +187,17 @@ je video veľké. Program postupuje od najistejšieho k najmenej istému:
    chybami, pri správnych ide takmer čisto.
 
 Ak rozlíšenie pôvodného videa poznáš a zadáš ho, počet kombinácií klesne rádovo.
+
+## Kam sa ukladajú výsledky
+
+Výstupný priečinok si vyberieš v kroku **3 · Oprava**. Predvolene je to podpriečinok
+`opravene/` vedľa pôvodného videa, ale jedným klikom sa dá prepnúť na *Plochu*,
+*Dokumenty* alebo *domovský priečinok*.
+
+Program ešte pred spustením overí, či sa do zvoleného miesta dá naozaj zapisovať,
+a ak nie, povie prečo. Najčastejší prípad na macOS: **externý disk naformátovaný
+ako NTFS je pripojený len na čítanie** — video sa z neho dá načítať, ale výsledok
+naň zapísať nie. Vtedy stačí zvoliť priečinok na internom disku.
 
 ## Obmedzenia — na rovinu
 

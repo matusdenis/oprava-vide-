@@ -82,6 +82,8 @@ pre{background:var(--panel2);border:1px solid var(--ciara);border-radius:7px;pad
 .volby{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0}
 .volba{background:var(--panel2);border:1px solid var(--ciara);border-radius:7px;padding:9px 11px}
 .volba label{display:block;font-size:12px;color:var(--tlmene);margin-bottom:5px}
+.volba.siroka{grid-column:1/-1}
+.disky button.vybrany{background:var(--akcent);color:#fff;border-color:var(--akcent)}
 .vysledok{border-left:3px solid var(--dobre);background:var(--panel2);padding:11px 14px;
   border-radius:0 7px 7px 0;margin:9px 0}
 .vysledok.zly{border-left-color:var(--zle)}

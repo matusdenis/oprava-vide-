@@ -1,6 +1,34 @@
 "use strict";
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
-let stavAplikacie = { subor: null, analyza: null, strategia: null, uloha: null };
+let stavAplikacie = { subor: null, analyza: null, strategia: null, uloha: null,
+                      domov: "", vystup: "", priecinokVidea: "" };
+
+/* Prednastavené rozlíšenia — najčastejšie zdroje domáceho aj dronového videa.
+   Slúžia na rekonštrukciu parametrov, keď index videa neprežil. */
+const ROZLISENIA = [
+  { nazov: "4K UHD", w: 3840, h: 2160 },
+  { nazov: "4K DCI", w: 4096, h: 2160 },
+  { nazov: "5.4K dron", w: 5312, h: 2988 },
+  { nazov: "2.7K dron/GoPro", w: 2704, h: 1520 },
+  { nazov: "Full HD", w: 1920, h: 1080 },
+  { nazov: "HD", w: 1280, h: 720 },
+  { nazov: "4K zvislé", w: 2160, h: 3840 },
+  { nazov: "Full HD zvislé", w: 1080, h: 1920 },
+];
+
+/* Snímková frekvencia sa dá z poškodeného súboru zistiť len zriedka, preto sa
+   pri vyrezávaní zadáva ručne — určuje rýchlosť prehrávania výsledku. */
+const FPS_PREDVOLBY = [24, 25, 30, 50, 60, 120];
+
+/* Ktoré nastavenia ktorá stratégia naozaj používa. Ostatné sa skryjú, aby
+   používateľ nevypĺňal niečo, čo na výsledok nemá vplyv. */
+const VOLBY_STRATEGIE = {
+  mp4_graft: ["orezanie"],
+  mp4_carve: ["rozlisenie", "fps", "vzor", "hladanie"],
+  untrunc: ["rozlisenie", "fps", "vzor"],
+  ts_resync: [],
+  ffmpeg_remux: [],
+};
 
 /* ---------- pomocne ---------- */
 async function api(cesta, data) {
@@ -77,12 +105,14 @@ function vyberSubor(cesta) {
   const priecinok = cesta.substring(0, cesta.length - nazov.length - 1);
   const el = document.getElementById("vybranySubor");
   el.classList.remove("skryty");
+  stavAplikacie.priecinokVidea = priecinok;
+  stavAplikacie.vystup = priecinok + "/opravene";
   el.innerHTML = `<b>Vybraný súbor:</b> <code>${esc(cesta)}</code>
     <div class="riadok" style="margin-top:12px">
       <button id="btnAnalyza">Analyzovať súbor</button>
-      <input type="text" id="vystupPriecinok" value="${esc(priecinok + "/opravene")}">
     </div>
-    <p class="popis" style="margin:0">Výsledky sa uložia do priečinka vyššie. Pôvodný súbor sa nemení.</p>`;
+    <p class="popis" style="margin:0">Pôvodný súbor sa nikdy nemení — výsledky idú do
+      samostatného priečinka, ktorý si vyberieš v kroku 3.</p>`;
   document.getElementById("btnAnalyza").onclick = spustiAnalyzu;
 }
 document.getElementById("btnPrejst").onclick = () =>
@@ -231,19 +261,31 @@ function pripravOpravu(a) {
   });
   stavAplikacie.strategia = strategie.length ? strategie[0].id : null;
 
-  html += `<div class="karta"><h3 style="margin-top:0">Voliteľné nastavenia</h3>
+  html += `<div class="karta"><h3 style="margin-top:0">Kam uložiť výsledok</h3>
+    <div class="riadok">
+      <input type="text" id="vystupPriecinok" value="${esc(stavAplikacie.vystup)}"
+             spellcheck="false">
+    </div>
+    <div class="disky" id="rychleVystupy"></div>
+    <p class="popis" id="stavVystupu" style="margin:6px 0 0"></p></div>
+
+    <div class="karta"><h3 style="margin-top:0">Voliteľné nastavenia</h3>
     <div class="volby">
-      <div class="volba"><label>Rozlíšenie pôvodného videa (ak ho poznáš)</label>
-        <div class="riadok" style="margin:0">
+      <div class="volba siroka" data-volba="rozlisenie"><label>Rozlíšenie pôvodného videa
+        (ak ho poznáš — hľadanie parametrov sa tým rádovo zrýchli)</label>
+        <div class="riadok" style="margin:0 0 8px">
           <input type="number" id="volbaSirka" placeholder="šírka" style="min-width:70px">
-          <input type="number" id="volbaVyska" placeholder="výška" style="min-width:70px"></div></div>
-      <div class="volba"><label>Snímková frekvencia</label>
-        <input type="number" id="volbaFps" value="30"></div>
-      <div class="volba"><label>Zdravý vzorový súbor z rovnakého zariadenia (nepovinné)</label>
+          <input type="number" id="volbaVyska" placeholder="výška" style="min-width:70px"></div>
+        <div class="disky" id="predvolbyRozlisenia"></div></div>
+      <div class="volba siroka" data-volba="fps"><label>Snímková frekvencia výsledku</label>
+        <input type="number" id="volbaFps" value="30" style="max-width:120px">
+        <div class="disky" id="predvolbyFps" style="margin-top:8px"></div></div>
+      <div class="volba" data-volba="vzor"><label>Zdravý vzorový súbor z rovnakého
+        zariadenia (nepovinné)</label>
         <input type="text" id="volbaVzor" placeholder="cesta k zdravému súboru"></div>
-      <div class="volba"><label><input type="checkbox" id="volbaOrezat" checked>
-        Vyrobiť aj čistú verziu bez poškodeného začiatku</label>
-        <label style="margin-top:6px"><input type="checkbox" id="volbaRychle" checked>
+      <div class="volba" data-volba="orezanie"><label><input type="checkbox" id="volbaOrezat" checked>
+        Vyrobiť aj čistú verziu bez poškodeného začiatku</label></div>
+      <div class="volba" data-volba="hladanie"><label><input type="checkbox" id="volbaRychle" checked>
         Rýchle hľadanie parametrov (menej kombinácií)</label></div>
     </div>
     <button id="btnSpustit">Spustiť opravu</button></div>
@@ -254,8 +296,81 @@ function pripravOpravu(a) {
     el.querySelectorAll(".strategia").forEach(x => x.classList.remove("vybrana"));
     s.classList.add("vybrana");
     stavAplikacie.strategia = s.dataset.id;
+    zobrazVolby();
   });
+
+  // prednastavené rozlíšenia
+  document.getElementById("predvolbyRozlisenia").innerHTML = ROZLISENIA
+    .map((r, i) => `<button data-i="${i}">${esc(r.nazov)} · ${r.w}×${r.h}</button>`).join("")
+    + `<button data-i="-1">Neviem — skúsiť všetky</button>`;
+  document.querySelectorAll("#predvolbyRozlisenia button").forEach(b => b.onclick = () => {
+    const r = ROZLISENIA[+b.dataset.i];
+    document.getElementById("volbaSirka").value = r ? r.w : "";
+    document.getElementById("volbaVyska").value = r ? r.h : "";
+    document.querySelectorAll("#predvolbyRozlisenia button")
+      .forEach(x => x.classList.toggle("vybrany", x === b));
+  });
+
+  // prednastavené snímkové frekvencie
+  document.getElementById("predvolbyFps").innerHTML = FPS_PREDVOLBY
+    .map(f => `<button data-f="${f}">${f}</button>`).join("");
+  document.querySelectorAll("#predvolbyFps button").forEach(b => b.onclick = () => {
+    document.getElementById("volbaFps").value = b.dataset.f;
+    document.querySelectorAll("#predvolbyFps button")
+      .forEach(x => x.classList.toggle("vybrany", x === b));
+  });
+
+  // rýchla voľba výstupného priečinka
+  const d = stavAplikacie.domov;
+  const miesta = [
+    { nazov: "Vedľa videa", cesta: stavAplikacie.priecinokVidea + "/opravene" },
+    { nazov: "Plocha", cesta: d + "/Desktop/opravene-videa" },
+    { nazov: "Dokumenty", cesta: d + "/Documents/opravene-videa" },
+    { nazov: "Domovský priečinok", cesta: d + "/opravene-videa" },
+  ];
+  document.getElementById("rychleVystupy").innerHTML = miesta
+    .map((m, i) => `<button data-i="${i}">${esc(m.nazov)}</button>`).join("");
+  document.querySelectorAll("#rychleVystupy button").forEach(b => b.onclick = () => {
+    document.getElementById("vystupPriecinok").value = miesta[+b.dataset.i].cesta;
+    overVystup();
+  });
+  document.getElementById("vystupPriecinok").addEventListener("change", overVystup);
   document.getElementById("btnSpustit").onclick = spustiOpravu;
+  zobrazVolby();
+  overVystup();
+}
+
+/* Ukáže len tie nastavenia, ktoré zvolená stratégia naozaj používa. */
+function zobrazVolby() {
+  const pouzite = VOLBY_STRATEGIE[stavAplikacie.strategia] || [];
+  document.querySelectorAll("[data-volba]").forEach(v => {
+    v.hidden = !pouzite.includes(v.dataset.volba);
+  });
+  const karta = document.querySelector("[data-volba]")?.closest(".karta");
+  if (karta) karta.hidden = pouzite.length === 0;
+}
+
+/* Overí, či sa do zvoleného priečinka dá zapisovať. Externé disky (NTFS) býva
+   macOS pripojený len na čítanie — vtedy sa to má používateľ dozvedieť hneď,
+   nie až keď oprava po niekoľkých minútach spadne. */
+async function overVystup() {
+  const pole = document.getElementById("vystupPriecinok");
+  const stav = document.getElementById("stavVystupu");
+  if (!pole || !stav) return;
+  stavAplikacie.vystup = pole.value;
+  const btn = document.getElementById("btnSpustit");
+  try {
+    const v = await api("/api/kontrola-vystupu", { cesta: pole.value });
+    if (v.zapisovatelny) {
+      stav.innerHTML = `<span class="znacka dobra">priečinok je v poriadku</span> `
+        + esc(v.popis || "");
+      if (btn) btn.disabled = false;
+    } else {
+      stav.innerHTML = `<span class="znacka zla">nedá sa doň zapisovať</span> `
+        + esc(v.popis || "") + ` — vyber iné miesto tlačidlom vyššie.`;
+      if (btn) btn.disabled = true;
+    }
+  } catch (e) { stav.textContent = e.message; }
 }
 
 async function spustiOpravu() {
@@ -439,6 +554,7 @@ async function ulozNastroj(meno) {
 (async () => {
   try {
     const s = await nacitajNastroje();
+    stavAplikacie.domov = s.domov;
     await prejst(s.domov);
     await nacitajDatabazu();
     if (!s.nastroje.ffmpeg.available) {

@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 import secrets
+import shutil
 import subprocess
 import threading
 import urllib.parse
@@ -78,6 +79,69 @@ def _vypis_priecinok(cesta: str) -> dict:
     return {"cesta": cesta, "rodic": rodic if rodic != cesta else None,
             "polozky": polozky,
             "disky": _disky()}
+
+
+def skontroluj_vystup(cesta: str) -> dict:
+    """Overi, ci sa do zvoleneho priecinka da zapisovat.
+
+    Externe disky (napr. NTFS) pripaja macOS casto len na citanie a sietove
+    disky mozu byt nedostupne. Pouzivatel sa to ma dozvediet hned pri vybere
+    priecinka, nie az ked oprava po niekolkych minutach spadne.
+    """
+    zadane = (cesta or "").strip()
+    if not zadane:
+        return {"zapisovatelny": False, "popis": "Nie je zadaná žiadna cesta."}
+    cesta = os.path.abspath(os.path.expanduser(zadane))
+
+    # najdeme najblizsi existujuci nadradeny priecinok
+    existujuci = cesta
+    while existujuci and not os.path.isdir(existujuci):
+        rodic = os.path.dirname(existujuci)
+        if rodic == existujuci:
+            break
+        existujuci = rodic
+    if not os.path.isdir(existujuci):
+        return {"zapisovatelny": False, "cesta": cesta,
+                "popis": "Takáto cesta v počítači neexistuje."}
+
+    if not os.access(existujuci, os.W_OK):
+        return {"zapisovatelny": False, "cesta": cesta, "existujuci": existujuci,
+                "popis": f"Do priečinka {existujuci} sa nedá zapisovať — býva to "
+                         f"externý disk pripojený len na čítanie (napr. NTFS na macOS) "
+                         f"alebo chýbajúce oprávnenie."}
+
+    # skutocny test zapisu - os.access na niektorych systemoch klame
+    skusobny = os.path.join(existujuci, ".vidfix-test-zapisu")
+    try:
+        with open(skusobny, "w") as f:
+            f.write("x")
+        os.remove(skusobny)
+    except OSError as exc:
+        popis = f"Do priečinka {existujuci} sa nedá zapisovať ({exc.strerror})."
+        if getattr(exc, "errno", None) == 30:
+            popis += (" Disk je pripojený len na čítanie — na macOS sa to stáva "
+                      "pri diskoch naformátovaných ako NTFS.")
+        return {"zapisovatelny": False, "cesta": cesta, "existujuci": existujuci,
+                "popis": popis}
+
+    volne = shutil.disk_usage(existujuci).free
+    # kolko urovni priecinkov bude treba vytvorit - vela urovni zvycajne znamena
+    # preklep alebo nepripojeny externy disk
+    chybajuce = 0
+    p = cesta
+    while p != existujuci and os.path.dirname(p) != p:
+        chybajuce += 1
+        p = os.path.dirname(p)
+    popis = ""
+    if chybajuce == 1:
+        popis = "Priečinok sa vytvorí. "
+    elif chybajuce > 1:
+        popis = (f"Pozor: vytvorí sa {chybajuce} nových úrovní priečinkov pod "
+                 f"{existujuci} — skontroluj, či nejde o preklep alebo o externý "
+                 f"disk, ktorý nie je pripojený. ")
+    return {"zapisovatelny": True, "cesta": cesta, "volne_miesto": volne,
+            "nove_urovne": chybajuce,
+            "popis": popis + f"Voľné miesto: {human(volne)}."}
 
 
 def _disky() -> list:
@@ -199,6 +263,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(_vypis_priecinok(telo.get("cesta") or ""))
             elif cesta == "/api/analyza":
                 self._analyza(telo)
+            elif cesta == "/api/kontrola-vystupu":
+                self._json(skontroluj_vystup(telo.get("cesta", "")))
             elif cesta == "/api/oprava":
                 self._oprava(telo)
             elif cesta == "/api/nastroje":
@@ -239,6 +305,10 @@ class Handler(BaseHTTPRequestHandler):
         volby = telo.get("volby") or {}
         if not os.path.isfile(cesta):
             self._json({"chyba": "Súbor neexistuje."}, 400)
+            return
+        kontrola = skontroluj_vystup(vystup)
+        if not kontrola["zapisovatelny"]:
+            self._json({"chyba": "Výsledok sa nedá uložiť. " + kontrola["popis"]}, 400)
             return
         st = self.stav
 
