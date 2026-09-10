@@ -81,7 +81,23 @@ takže sa k nemu z iného počítača pripojiť nedá.
 
 Postup je v troch krokoch: **1 · Súbor** → **2 · Analýza** → **3 · Oprava**.
 Analýza ukáže, čo v súbore prežilo, kde končí zašifrovaná časť a ktorý postup
-sa na daný súbor hodí najlepšie.
+sa na daný súbor hodí najlepšie. Cesty nikde nemusíš vypisovať — súbor,
+výstupný priečinok aj vzorové video sa vyberajú klikaním.
+
+### Dávková oprava
+
+Keď prvé video dopadne dobre, tlačidlom **„Opraviť rovnako aj ostatné videá…“**
+sa tie isté nastavenia použijú na celý priečinok. Postup sa pritom pre každý
+súbor volí zvlášť — v jednom priečinku bývajú aj súbory s prežitým indexom
+(stačí nahradiť hlavičku), aj také, ktorým index neprežil (treba vyrezávať).
+Priebeh vidno po jednotlivých súboroch, dávka sa dá kedykoľvek prerušiť
+a súbor, ktorý zlyhá, ju nezastaví — pokračuje sa ďalším.
+
+Z príkazového riadka to isté urobí:
+
+```bash
+python3 vidfix.py davka ~/videa -o ~/opravene
+```
 
 ### Príkazový riadok
 

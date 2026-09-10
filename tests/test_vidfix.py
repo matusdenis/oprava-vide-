@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vidfix import carve, h264_params, mp4                       # noqa: E402
 from vidfix.analyze import analyze                               # noqa: E402
 from vidfix.headerdb import HeaderDB                             # noqa: E402
-from vidfix.repair import Ctx, spusti                            # noqa: E402
+from vidfix.repair import Ctx, najdi_videa, spusti, spusti_davku  # noqa: E402
 from vidfix.tools import Toolbox                                 # noqa: E402
 from vidfix.util import entropy, human                           # noqa: E402
 from vzorky import posifruj_skakavo, posifruj_zaciatok, vyrob_video  # noqa: E402
@@ -324,6 +324,61 @@ class TestH265(ZakladVzorky):
         mp4y = [o for o in v["vystupy"] if o["cesta"].endswith(".mp4")]
         self.assertTrue(mp4y, "očakával som prehrateľné MP4 na výstupe")
         self.assertGreater(os.path.getsize(mp4y[0]["cesta"]), 65536)
+
+
+@potrebuje_ffmpeg
+class TestDavka(ZakladVzorky):
+    """Dávka musí zvládnuť priečinok, kde sú rôzne poškodené súbory."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.davka_dir = os.path.join(cls.dir, "davka")
+        os.makedirs(cls.davka_dir, exist_ok=True)
+        # jeden s prežitým indexom, jeden faststart (index zničený)
+        bezny = vyrob_video(os.path.join(cls.dir, "bezny.mp4"), sekundy=6)
+        fs = vyrob_video(os.path.join(cls.dir, "fs.mp4"), sekundy=6, faststart=True)
+        # ransomvér súbory premenúva, preto aj tu iná prípona
+        posifruj_zaciatok(bezny, os.path.join(cls.davka_dir, "A001.MP4.locked"), 256 * 1024)
+        posifruj_zaciatok(fs, os.path.join(cls.davka_dir, "A002.MP4.locked"), 256 * 1024)
+
+    def test_najdi_videa_zoberie_aj_premenovane(self):
+        subory = najdi_videa(self.davka_dir)
+        self.assertEqual(len(subory), 2)
+        self.assertTrue(all(c.endswith(".locked") for c in subory))
+
+    def test_najdi_videa_vynecha_zadane(self):
+        vsetky = najdi_videa(self.davka_dir)
+        zvysok = najdi_videa(self.davka_dir, vynechaj={vsetky[0]})
+        self.assertEqual(len(zvysok), len(vsetky) - 1)
+
+    def test_davka_zvoli_postup_pre_kazdy_subor_zvlast(self):
+        subory = najdi_videa(self.davka_dir)
+        v = spusti_davku(subory, self.out("davka_vystup"), TB, HeaderDB(),
+                         {"fps": 25}, log=lambda m: None)
+        self.assertEqual(v["pocet"], 2)
+        self.assertEqual(v["hotove"], 2, "oba súbory sa mali podariť")
+        postupy = {r["subor"]: r["strategia"] for r in v["vysledky"]}
+        self.assertEqual(postupy["A001.MP4.locked"], "mp4_graft")
+        self.assertEqual(postupy["A002.MP4.locked"], "mp4_carve")
+
+    def test_davka_sa_da_prerusit(self):
+        subory = najdi_videa(self.davka_dir)
+        v = spusti_davku(subory, self.out("davka_stop"), TB, HeaderDB(), {},
+                         log=lambda m: None, preruseny=lambda: True)
+        self.assertEqual(v["hotove"], 0, "pri prerušení sa nemá spracovať nič")
+
+    def test_davka_prezije_chybny_subor(self):
+        zly = os.path.join(self.davka_dir, "pokazeny.mp4")
+        with open(zly, "wb") as f:
+            f.write(b"toto nie je video" * 5000)
+        try:
+            v = spusti_davku(najdi_videa(self.davka_dir), self.out("davka_mix"),
+                             TB, HeaderDB(), {"fps": 25}, log=lambda m: None)
+            self.assertEqual(v["hotove"], 2)
+            self.assertEqual(v["zlyhane"], 1)
+        finally:
+            os.remove(zly)
 
 
 if __name__ == "__main__":

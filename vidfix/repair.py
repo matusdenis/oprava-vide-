@@ -12,6 +12,7 @@ import os
 import shutil
 
 from . import carve, h264_params, mp4
+from .analyze import analyze
 from .util import human, safe_name
 
 COPY_CHUNK = 8 << 20
@@ -572,3 +573,75 @@ def spusti(strategy_id: str, ctx: Ctx) -> dict:
             "Nainštaluj ho (v záložke Nástroje je návod), alebo použi postup "
             "„Nahradenie hlavičky“, ktorý ffmpeg nepotrebuje.")
     return fn(ctx)
+
+
+# ---------------------------------------------------------------------------
+# Davkova oprava
+# ---------------------------------------------------------------------------
+
+def najdi_videa(priecinok: str, vynechaj: set | None = None) -> list:
+    """Zoznam videi v priecinku, vratane premenovanych ransomverom."""
+    vynechaj = {os.path.abspath(c) for c in (vynechaj or set())}
+    out = []
+    try:
+        with os.scandir(priecinok) as it:
+            for e in it:
+                if not e.is_file() or os.path.abspath(e.path) in vynechaj:
+                    continue
+                if _mozne_video(e.path) and os.path.getsize(e.path) > (64 << 10):
+                    out.append(e.path)
+    except OSError:
+        return []
+    out.sort(key=lambda c: os.path.basename(c).lower())
+    return out
+
+
+def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
+                 strategia: str | None = None, preruseny=None) -> dict:
+    """Opravi cely zoznam suborov rovnakym postupom ako ten prvy.
+
+    Postup sa pre kazdy subor volí zvlast: v jednom priecinku byvaju subory,
+    ktorym index prezil (staci nahradit hlavicku), aj take, ktorym neprezil
+    (treba vyrezavat). Nastavenia - vzorovy subor, rozlisenie, snimkova
+    frekvencia - sa preberaju z prveho, uspesneho behu.
+    """
+    vysledky = []
+    hotove = zlyhane = 0
+    for i, cesta in enumerate(subory, 1):
+        if preruseny and preruseny():
+            log("Dávka prerušená používateľom.")
+            break
+        nazov = os.path.basename(cesta)
+        log("")
+        log(f"───── [{i}/{len(subory)}] {nazov} " + "─" * max(0, 40 - len(nazov)))
+        try:
+            rep = analyze(cesta, db, toolbox)
+            zvolena = strategia
+            if not zvolena:
+                navrhy = [s["id"] for s in rep.get("strategie", [])]
+                zvolena = navrhy[0] if navrhy else None
+            if not zvolena:
+                raise RuntimeError("Pre tento súbor sa nenašiel vhodný postup.")
+            if zvolena in VYZADUJU_FFMPEG and not toolbox.path("ffmpeg"):
+                raise RuntimeError("Tento postup potrebuje ffmpeg.")
+            log(f"Postup: {zvolena}")
+            ctx = Ctx(cesta, outdir, toolbox, db, volby, log=log)
+            v = spusti(zvolena, ctx)
+            hotove += 1
+            vysledky.append({"subor": nazov, "cesta": cesta, "ok": True,
+                             "strategia": zvolena, "zhrnutie": v.get("zhrnutie", ""),
+                             "vystupy": v.get("vystupy", []),
+                             "kontrola": v.get("kontrola", {})})
+            log(f"✓ hotovo — {len(v.get('vystupy', []))} výsledných súborov")
+        except Exception as exc:            # noqa: BLE001 - chybu chceme ukazat a ist dalej
+            zlyhane += 1
+            vysledky.append({"subor": nazov, "cesta": cesta, "ok": False,
+                             "chyba": str(exc) or exc.__class__.__name__})
+            log(f"✗ nepodarilo sa: {exc}")
+
+    log("")
+    log("=" * 56)
+    log(f"Hotovo: {hotove} z {len(subory)} súborov opravených, {zlyhane} zlyhalo.")
+    return {"ok": hotove > 0, "pocet": len(subory), "hotove": hotove,
+            "zlyhane": zlyhane, "vysledky": vysledky,
+            "zhrnutie": f"Opravených {hotove} z {len(subory)} súborov."}

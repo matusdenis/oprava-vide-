@@ -105,3 +105,14 @@ pre{background:var(--panel2);border:1px solid var(--ciara);border-radius:7px;pad
 .udaj span{font-size:14.5px}
 a{color:var(--akcent)}
 details summary{cursor:pointer;color:var(--tlmene);font-size:13px;padding:4px 0}
+
+/* Dialóg na výber súboru alebo priečinka */
+.prekryv{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;
+  z-index:20;padding:20px}
+.prekryv[hidden]{display:none}
+.dialog{background:var(--panel);border:1px solid var(--ciara);border-radius:11px;
+  width:min(720px,100%);max-height:86vh;display:flex;flex-direction:column;
+  box-shadow:0 18px 50px rgba(0,0,0,.4);padding:16px 18px}
+.dialog h3{margin:0 0 10px}
+.dialog .prehliadac{flex:1;min-height:220px}
+.dialog .popis{margin:10px 0 0}

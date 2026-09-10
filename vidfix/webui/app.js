@@ -126,6 +126,93 @@ document.getElementById("cestaVstup").addEventListener("keydown", e => {
   if (e.key === "Enter") prejst(e.target.value);
 });
 
+/* ---------- dialóg na výber súboru alebo priečinka ----------
+   Používa ten istý serverový prehliadač ako krok 1, aby používateľ nemusel
+   nikde vypisovať cesty ručne. */
+let dialogHotovo = null;
+
+function postavDialog() {
+  if (document.getElementById("prekryv")) return;
+  const e = document.createElement("div");
+  e.className = "prekryv";
+  e.id = "prekryv";
+  e.hidden = true;
+  e.innerHTML = `<div class="dialog">
+    <h3 id="dlgNadpis">Vyber súbor</h3>
+    <div class="riadok">
+      <input type="text" id="dlgCesta" spellcheck="false">
+      <button id="dlgPrejst">Prejsť</button>
+    </div>
+    <div class="disky" id="dlgDisky"></div>
+    <div class="prehliadac" id="dlgZoznam"></div>
+    <p class="popis" id="dlgPomoc" style="font-size:12px"></p>
+    <div class="riadok" style="margin:12px 0 0">
+      <button id="dlgVybrat">Vybrať tento priečinok</button>
+      <button class="tichy" id="dlgZrusit">Zrušiť</button>
+    </div></div>`;
+  document.body.appendChild(e);
+  e.onclick = ev => { if (ev.target === e) zavriDialog(null); };
+  document.getElementById("dlgZrusit").onclick = () => zavriDialog(null);
+  document.getElementById("dlgPrejst").onclick = () =>
+    dlgPrejst(document.getElementById("dlgCesta").value);
+  document.getElementById("dlgCesta").addEventListener("keydown", ev => {
+    if (ev.key === "Enter") dlgPrejst(ev.target.value);
+  });
+  document.addEventListener("keydown", ev => {
+    if (ev.key === "Escape" && !e.hidden) zavriDialog(null);
+  });
+}
+
+function zavriDialog(vysledok) {
+  const e = document.getElementById("prekryv");
+  if (e) e.hidden = true;
+  if (dialogHotovo) { dialogHotovo(vysledok); dialogHotovo = null; }
+}
+
+async function dlgPrejst(cesta) {
+  try {
+    const v = await api("/api/prehliadac", { cesta });
+    document.getElementById("dlgCesta").value = v.cesta;
+    document.getElementById("dlgVybrat").dataset.cesta = v.cesta;
+    document.getElementById("dlgDisky").innerHTML = (v.disky || [])
+      .map(d => `<button data-cesta="${esc(d.cesta)}">${esc(d.nazov)}</button>`).join("");
+    document.querySelectorAll("#dlgDisky button").forEach(b =>
+      b.onclick = () => dlgPrejst(b.dataset.cesta));
+    const iba = document.getElementById("prekryv").dataset.rezim === "priecinok";
+    let html = "";
+    if (v.rodic) html += `<div class="polozka" data-dir="${esc(v.rodic)}">
+      <span class="ikona">↰</span><span>.. (o úroveň vyššie)</span></div>`;
+    for (const p of v.polozky) {
+      if (!p.priecinok && iba) continue;
+      const video = !p.priecinok && jeVideo(p.nazov);
+      html += `<div class="polozka ${video ? "video" : ""}" ${p.priecinok
+        ? `data-dir="${esc(p.cesta)}"` : `data-file="${esc(p.cesta)}"`}>
+        <span class="ikona">${p.priecinok ? "📁" : (video ? "🎬" : "📄")}</span>
+        <span>${esc(p.nazov)}</span>
+        <span class="velkost">${esc(p.velkost_citatelne)}</span></div>`;
+    }
+    const zoznam = document.getElementById("dlgZoznam");
+    zoznam.innerHTML = html || '<div class="polozka">Priečinok je prázdny.</div>';
+    zoznam.querySelectorAll("[data-dir]").forEach(d => d.onclick = () => dlgPrejst(d.dataset.dir));
+    zoznam.querySelectorAll("[data-file]").forEach(d =>
+      d.onclick = () => zavriDialog(d.dataset.file));
+  } catch (e) { hlaska(e.message, true); }
+}
+
+/* Otvorí dialóg a vráti vybranú cestu (alebo null pri zrušení). */
+function vyberCestu({ nadpis, start, rezim = "oboje", pomoc = "" }) {
+  postavDialog();
+  const e = document.getElementById("prekryv");
+  e.dataset.rezim = rezim;
+  e.hidden = false;
+  document.getElementById("dlgNadpis").textContent = nadpis;
+  document.getElementById("dlgPomoc").textContent = pomoc;
+  document.getElementById("dlgVybrat").onclick = () =>
+    zavriDialog(document.getElementById("dlgVybrat").dataset.cesta);
+  dlgPrejst(start || stavAplikacie.domov);
+  return new Promise(res => { dialogHotovo = res; });
+}
+
 /* ---------- sledovanie úlohy ---------- */
 async function sledujUlohu(id, naRiadok, naKoniec) {
   let od = 0;
@@ -270,6 +357,7 @@ function pripravOpravu(a) {
     <div class="riadok">
       <input type="text" id="vystupPriecinok" value="${esc(stavAplikacie.vystup)}"
              spellcheck="false">
+      <button class="tichy" id="btnVyberVystup">Prehľadať…</button>
     </div>
     <div class="disky" id="rychleVystupy"></div>
     <p class="popis" id="stavVystupu" style="margin:6px 0 0"></p></div>
@@ -287,7 +375,10 @@ function pripravOpravu(a) {
         <div class="disky" id="predvolbyFps" style="margin-top:8px"></div></div>
       <div class="volba" data-volba="vzor"><label>Iné video z tej istej kamery
         (nepovinné) — <b>stačí aj poškodené</b></label>
-        <input type="text" id="volbaVzor" placeholder="cesta k súboru alebo priečinku">
+        <div class="riadok" style="margin:0">
+          <input type="text" id="volbaVzor" placeholder="nevybrané — prehľadá sa okolie">
+          <button class="tichy" id="btnVyberVzor">Prehľadať…</button>
+        </div>
         <p class="popis" style="margin:6px 0 0;font-size:11.5px">Program automaticky
         prehľadá aj priečinok, v ktorom leží opravovaný súbor. Parametre kamery sa
         dajú vytiahnuť aj zo zašifrovaných videí — ransomvér poškodí len začiatok,
@@ -346,6 +437,29 @@ function pripravOpravu(a) {
   });
   document.getElementById("vystupPriecinok").addEventListener("change", overVystup);
   document.getElementById("btnSpustit").onclick = spustiOpravu;
+
+  document.getElementById("btnVyberVzor").onclick = async () => {
+    const c = await vyberCestu({
+      nadpis: "Vyber iné video z tej istej kamery — alebo priečinok, kde ich máš",
+      start: stavAplikacie.priecinokVidea || stavAplikacie.domov,
+      rezim: "oboje",
+      pomoc: "Klikni na video, alebo tlačidlom nižšie vyber celý priečinok. "
+           + "Poškodené súbory sú v poriadku — parametre kamery sa dajú vytiahnuť aj z nich.",
+    });
+    if (c) document.getElementById("volbaVzor").value = c;
+  };
+  document.getElementById("btnVyberVystup").onclick = async () => {
+    const c = await vyberCestu({
+      nadpis: "Vyber priečinok, kam sa uloží výsledok",
+      start: document.getElementById("vystupPriecinok").value || stavAplikacie.domov,
+      rezim: "priecinok",
+      pomoc: "Prejdi do priečinka a potvrď tlačidlom nižšie.",
+    });
+    if (c) {
+      document.getElementById("vystupPriecinok").value = c;
+      overVystup();
+    }
+  };
   zobrazVolby();
   overVystup();
 }
@@ -400,14 +514,8 @@ async function overVystup() {
   } catch (e) { stav.textContent = e.message; }
 }
 
-async function spustiOpravu() {
-  const btn = document.getElementById("btnSpustit");
-  btn.disabled = true;
-  const priebeh = document.getElementById("priebehOpravy");
-  priebeh.innerHTML = `<div class="karta"><h3 style="margin-top:0">
-    <span class="spinner"></span>Prebieha oprava…</h3><pre class="log" id="logOpravy"></pre></div>`;
-  const log = document.getElementById("logOpravy");
-  const volby = {
+function zozbierajVolby() {
+  return {
     sirka: +document.getElementById("volbaSirka").value || null,
     vyska: +document.getElementById("volbaVyska").value || null,
     fps: +document.getElementById("volbaFps").value || 30,
@@ -415,6 +523,16 @@ async function spustiOpravu() {
     orezat: document.getElementById("volbaOrezat").checked,
     rychle_hladanie: document.getElementById("volbaRychle").checked,
   };
+}
+
+async function spustiOpravu() {
+  const btn = document.getElementById("btnSpustit");
+  btn.disabled = true;
+  const priebeh = document.getElementById("priebehOpravy");
+  priebeh.innerHTML = `<div class="karta"><h3 style="margin-top:0">
+    <span class="spinner"></span>Prebieha oprava…</h3><pre class="log" id="logOpravy"></pre></div>`;
+  const log = document.getElementById("logOpravy");
+  const volby = zozbierajVolby();
   try {
     const { uloha } = await api("/api/oprava", {
       cesta: stavAplikacie.subor,
@@ -462,13 +580,97 @@ function vykresliVysledok(s, priebeh, log) {
     const posledny = v.vystupy[v.vystupy.length - 1].cesta;
     html += `<div class="riadok" style="margin-top:12px">
       <button class="tichy" onclick="otvorPriecinok('${esc(posledny).replace(/'/g, "\\'")}')">
-        Otvoriť priečinok s výsledkom</button></div>
+        Otvoriť priečinok s výsledkom</button>
+      <button id="btnDavka">Opraviť rovnako aj ostatné videá…</button></div>
       <img class="nahlad" alt="náhľad prvého snímku"
         src="/api/nahlad?token=${encodeURIComponent(TOKEN)}&cesta=${encodeURIComponent(posledny)}"
         onerror="this.style.display='none'">`;
   }
   html += `</div>`;
   priebeh.insertAdjacentHTML("beforeend", html);
+  pripojDavku();
+}
+
+/* ---------- dávková oprava ----------
+   Nastavenia, ktoré na prvom videu zabrali, sa použijú na celý priečinok.
+   Postup sa však volí pre každý súbor zvlášť: v jednom priečinku bývajú aj
+   súbory s prežitým indexom, aj také, ktorým index neprežil. */
+function pripojDavku() {
+  const btn = document.getElementById("btnDavka");
+  if (!btn) return;
+  btn.onclick = async () => {
+    const priecinok = await vyberCestu({
+      nadpis: "Vyber priečinok s videami, ktoré sa majú opraviť rovnako",
+      start: stavAplikacie.priecinokVidea || stavAplikacie.domov,
+      rezim: "priecinok",
+      pomoc: "Prejdi do priečinka s ostatnými poškodenými videami a potvrď ho. "
+           + "Postup sa pre každý súbor zvolí automaticky podľa toho, čo v ňom prežilo.",
+    });
+    if (priecinok) spustiDavku(priecinok);
+  };
+}
+
+async function spustiDavku(priecinok) {
+  const priebeh = document.getElementById("priebehOpravy");
+  try {
+    const zoznam = await api("/api/zoznam-videi",
+      { priecinok, vynechaj: [stavAplikacie.subor] });
+    if (!zoznam.subory.length) {
+      hlaska("V tomto priečinku sa nenašli žiadne ďalšie videá.", true);
+      return;
+    }
+    const volby = zozbierajVolby();
+    priebeh.insertAdjacentHTML("beforeend", `<div class="karta" id="kartaDavky">
+      <h3 style="margin-top:0"><span class="spinner"></span>
+        Dávková oprava — ${zoznam.subory.length} súborov</h3>
+      <p class="popis">${zoznam.subory.map(s => esc(s.nazov)).join(", ")}</p>
+      <div class="riadok"><button class="tichy" id="btnPrerusit">Prerušiť</button></div>
+      <pre class="log" id="logDavky"></pre></div>`);
+    const log = document.getElementById("logDavky");
+    const { uloha } = await api("/api/davka", {
+      priecinok,
+      vynechaj: [stavAplikacie.subor],
+      vystup: document.getElementById("vystupPriecinok").value,
+      volby,
+    });
+    document.getElementById("btnPrerusit").onclick = async () => {
+      try { await api("/api/uloha/zrusit", { id: uloha }); hlaska("Prerušujem po dobehnutí súboru…"); }
+      catch (e) { hlaska(e.message, true); }
+    };
+    sledujUlohu(uloha, riadky => {
+      log.textContent += riadky.map(r => r.text).join("\n") + "\n";
+      log.scrollTop = log.scrollHeight;
+    }, s => vykresliDavku(s));
+  } catch (e) { hlaska(e.message, true); }
+}
+
+function vykresliDavku(s) {
+  const karta = document.getElementById("kartaDavky");
+  if (!karta) return;
+  const btn = document.getElementById("btnPrerusit");
+  if (btn) btn.remove();
+  if (s.stav === "chyba") {
+    karta.querySelector("h3").textContent = "Dávka zlyhala";
+    karta.insertAdjacentHTML("beforeend",
+      `<div class="vysledok zly">${esc(s.chyba)}</div>`);
+    return;
+  }
+  const v = s.vysledok || {};
+  karta.querySelector("h3").textContent =
+    `Dávková oprava — ${v.hotove || 0} z ${v.pocet || 0} hotových`;
+  let html = `<div class="vysledok ${v.zlyhane ? "" : ""}"><b>${esc(v.zhrnutie || "")}</b></div>
+    <table><tr><th>Súbor</th><th>Stav</th><th>Postup</th><th>Výsledok</th></tr>`;
+  for (const r of (v.vysledky || [])) {
+    html += `<tr><td>${esc(r.subor)}</td>
+      <td>${r.ok ? '<span class="znacka dobra">opravené</span>'
+                 : '<span class="znacka zla">zlyhalo</span>'}</td>
+      <td>${esc(r.strategia || "—")}</td>
+      <td class="popis" style="margin:0">${r.ok
+        ? esc((r.vystupy || []).map(x => x.cesta.split(/[\\/]/).pop()).join(", "))
+        : esc(r.chyba || "")}</td></tr>`;
+  }
+  html += `</table>`;
+  karta.insertAdjacentHTML("beforeend", html);
 }
 
 async function otvorPriecinok(cesta) {

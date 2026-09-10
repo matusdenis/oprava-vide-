@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vidfix import __version__                      # noqa: E402
 from vidfix.analyze import analyze                  # noqa: E402
 from vidfix.headerdb import HeaderDB                # noqa: E402
-from vidfix.repair import Ctx, STRATEGIE, spusti    # noqa: E402
+from vidfix.repair import (Ctx, STRATEGIE, najdi_videa,      # noqa: E402
+                           spusti, spusti_davku)
 from vidfix.tools import Toolbox                    # noqa: E402
 
 
@@ -79,6 +80,31 @@ def prikaz_oprav(args) -> int:
     return 0 if vysledok.get("ok") else 1
 
 
+def prikaz_davka(args) -> int:
+    db, tb = HeaderDB(), Toolbox()
+    if os.path.isdir(args.priecinok):
+        subory = najdi_videa(args.priecinok)
+    else:
+        print(f"Priecinok neexistuje: {args.priecinok}", file=sys.stderr)
+        return 2
+    if not subory:
+        print("V priecinku sa nenasli ziadne videa.", file=sys.stderr)
+        return 2
+    print(f"Najdenych {len(subory)} videi.")
+    vystup = args.vystup or os.path.join(os.path.abspath(args.priecinok), "opravene")
+    volby = {"sirka": args.sirka, "vyska": args.vyska, "fps": args.fps,
+             "vzor": args.vzor, "orezat": not args.bez_orezania,
+             "rychle_hladanie": not args.dokladne}
+    v = spusti_davku(subory, vystup, tb, db, volby,
+                     log=lambda m: print(m, flush=True), strategia=args.strategia)
+    print("\n" + "=" * 66)
+    for r in v["vysledky"]:
+        znak = "OK   " if r["ok"] else "CHYBA"
+        print(f"  {znak} {r['subor']:36s} {r.get('strategia', '') or r.get('chyba', '')}")
+    print(v["zhrnutie"])
+    return 0 if v["ok"] else 1
+
+
 def prikaz_nastroje(args) -> int:
     tb = Toolbox()
     for meno, info in tb.status().items():
@@ -120,6 +146,18 @@ def main(argv=None) -> int:
     po.add_argument("--dokladne", action="store_true",
                     help="dôkladnejšie (a pomalšie) hľadanie parametrov")
 
+    pd = pod.add_parser("davka", help="oprava vsetkych videi v priecinku")
+    pd.add_argument("priecinok")
+    pd.add_argument("-o", "--vystup", help="priečinok pre výsledky")
+    pd.add_argument("-s", "--strategia", choices=sorted(STRATEGIE),
+                    help="vnútiť jeden postup (inak sa volí pre každý súbor zvlášť)")
+    pd.add_argument("--sirka", type=int)
+    pd.add_argument("--vyska", type=int)
+    pd.add_argument("--fps", type=int, default=30)
+    pd.add_argument("--vzor", help="iné video z tej istej kamery (aj poškodené)")
+    pd.add_argument("--bez-orezania", action="store_true")
+    pd.add_argument("--dokladne", action="store_true")
+
     pod.add_parser("nastroje", help="zobrazí nájdené nástroje a stav databázy")
 
     args = p.parse_args(argv)
@@ -127,6 +165,8 @@ def main(argv=None) -> int:
         return prikaz_analyza(args)
     if args.prikaz == "oprav":
         return prikaz_oprav(args)
+    if args.prikaz == "davka":
+        return prikaz_davka(args)
     if args.prikaz == "nastroje":
         return prikaz_nastroje(args)
     from vidfix.server import spusti_server

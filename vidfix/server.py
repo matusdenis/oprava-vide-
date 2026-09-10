@@ -19,7 +19,7 @@ from . import __version__
 from .analyze import analyze
 from .headerdb import HeaderDB
 from .jobs import JobManager
-from .repair import Ctx, spusti as spusti_strategiu
+from .repair import Ctx, najdi_videa, spusti as spusti_strategiu, spusti_davku
 from .tools import Toolbox
 from .util import human
 
@@ -267,6 +267,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(skontroluj_vystup(telo.get("cesta", "")))
             elif cesta == "/api/oprava":
                 self._oprava(telo)
+            elif cesta == "/api/davka":
+                self._davka(telo)
+            elif cesta == "/api/uloha/zrusit":
+                job = self.stav.jobs.get(telo.get("id", ""))
+                if not job:
+                    self._json({"chyba": "Úloha neexistuje."}, 404)
+                else:
+                    job.zrus()
+                    self._json({"ok": True})
+            elif cesta == "/api/zoznam-videi":
+                priecinok = telo.get("priecinok", "")
+                if not os.path.isdir(priecinok):
+                    self._json({"chyba": "Priečinok neexistuje."}, 400)
+                else:
+                    subory = najdi_videa(priecinok, vynechaj=set(telo.get("vynechaj") or []))
+                    self._json({"priecinok": priecinok,
+                                "subory": [{"cesta": c, "nazov": os.path.basename(c),
+                                            "velkost": os.path.getsize(c),
+                                            "velkost_citatelne": human(os.path.getsize(c))}
+                                           for c in subory]})
             elif cesta == "/api/nastroje":
                 for meno in ("ffmpeg", "ffprobe", "untrunc"):
                     if meno in telo:
@@ -318,6 +338,28 @@ class Handler(BaseHTTPRequestHandler):
 
         job = st.jobs.spusti(f"{strategia}: {os.path.basename(cesta)}", uloha)
         self._json({"uloha": job.id})
+
+    def _davka(self, telo: dict):
+        """Opraví celý zoznam súborov rovnakými nastaveniami ako prvý beh."""
+        subory = [c for c in (telo.get("subory") or []) if os.path.isfile(c)]
+        priecinok = telo.get("priecinok")
+        if not subory and priecinok and os.path.isdir(priecinok):
+            subory = najdi_videa(priecinok, vynechaj=set(telo.get("vynechaj") or []))
+        if not subory:
+            self._json({"chyba": "Nenašli sa žiadne videá na spracovanie."}, 400)
+            return
+        vystup = telo.get("vystup") or os.path.join(os.path.dirname(subory[0]), "opravene")
+        volby = telo.get("volby") or {}
+        strategia = telo.get("strategia") or None
+        st = self.stav
+
+        def uloha(log, job):
+            return spusti_davku(subory, vystup, st.toolbox, st.db, volby, log,
+                                strategia=strategia, preruseny=lambda: job.zrusene)
+
+        job = st.jobs.spusti(f"Dávka: {len(subory)} súborov", uloha, s_ulohou=True)
+        self._json({"uloha": job.id, "pocet": len(subory),
+                    "subory": [os.path.basename(c) for c in subory]})
 
     def _nahlad(self, cesta: str):
         """Vyrobi nahladovy obrazok z vysledneho suboru."""

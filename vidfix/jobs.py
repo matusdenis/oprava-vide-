@@ -17,7 +17,13 @@ class Job:
         self.chyba = None
         self.zaciatok = time.time()
         self.koniec = None
+        self.zrusene = False
         self._lock = threading.Lock()
+
+    def zrus(self):
+        """Poziada ulohu o ukoncenie. Dlhe ulohy priznak samy kontroluju."""
+        self.zrusene = True
+        self.log("Žiadosť o prerušenie — dokončím rozrobený súbor a skončím.")
 
     def log(self, sprava: str):
         with self._lock:
@@ -32,6 +38,7 @@ class Job:
                 "id": self.id, "nazov": self.nazov, "stav": self.stav,
                 "riadky": self.riadky[od:], "pocet_riadkov": len(self.riadky),
                 "vysledok": self.vysledok, "chyba": self.chyba,
+                "zrusene": self.zrusene,
                 "trvanie": round((self.koniec or time.time()) - self.zaciatok, 1),
             }
 
@@ -41,8 +48,13 @@ class JobManager:
         self.jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
 
-    def spusti(self, nazov: str, fn) -> Job:
-        """`fn(log)` sa vykona vo vlastnom vlakne."""
+    def spusti(self, nazov: str, fn, s_ulohou: bool = False) -> Job:
+        """`fn(log)` sa vykona vo vlastnom vlakne.
+
+        Pri `s_ulohou=True` dostane funkcia druhy argument - samotnu ulohu.
+        Dlhe ulohy vdaka tomu mozu kontrolovat, ci ich pouzivatel neprerusil,
+        bez toho, aby na ne musel volajuci cakat.
+        """
         job = Job(nazov)
         with self._lock:
             self.jobs[job.id] = job
@@ -50,7 +62,7 @@ class JobManager:
         def beh():
             job.stav = "bezi"
             try:
-                job.vysledok = fn(job.log)
+                job.vysledok = fn(job.log, job) if s_ulohou else fn(job.log)
                 job.stav = "hotovo"
             except Exception as exc:            # noqa: BLE001 - chybu ukazeme uzivatelovi
                 job.chyba = str(exc) or exc.__class__.__name__
