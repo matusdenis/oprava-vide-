@@ -2,7 +2,7 @@
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
 let stavAplikacie = { subor: null, analyza: null, strategia: null, uloha: null,
                       domov: "", vystup: "", priecinokVidea: "",
-                      maFfmpeg: true, vystupOk: true };
+                      maFfmpeg: true, vystupOk: true, verzie: "obidve" };
 
 /* Postupy, ktoré sa bez ffmpeg nedajú dokončiť. „Nahradenie hlavičky“ medzi ne
    nepatrí — to je čisté prepísanie hlavičky, ktoré ffmpeg nepotrebuje. */
@@ -502,8 +502,17 @@ function pripravOpravu(a) {
         prehľadá aj priečinok, v ktorom leží opravovaný súbor. Parametre kamery sa
         dajú vytiahnuť aj zo zašifrovaných videí — ransomvér poškodí len začiatok,
         takže hlavička na konci súboru väčšinou prežije.</p></div>
-      <div class="volba" data-volba="orezanie"><label><input type="checkbox" id="volbaOrezat" checked>
-        Vyrobiť aj čistú verziu bez poškodeného začiatku</label></div>
+      <div class="volba siroka" data-volba="orezanie"><label>Ktoré verzie uložiť</label>
+        <div class="disky" id="volbaVerzie">
+          <button data-v="obidve" class="vybrana">Obidve</button>
+          <button data-v="len_orezany">Len čistú (orezanú)</button>
+          <button data-v="len_opraveny">Len celú (v plnej dĺžke)</button>
+        </div>
+        <p class="popis" style="margin:6px 0 0;font-size:11.5px">
+          <b>Celá</b> má pôvodnú dĺžku aj veľkosť, ale na začiatku tých pár sekúnd,
+          ktoré ransomvér prepísal. <b>Čistá</b> začína až prvým neporušeným kľúčovým
+          snímkom — môže tak obetovať aj kúsok dobrého videa navyše. Pri veľkých
+          videách sa oplatí nechať len jednu, dve zaberú dvojnásobok miesta.</p></div>
       <div class="volba" data-volba="hladanie"><label><input type="checkbox" id="volbaRychle" checked>
         Rýchle hľadanie parametrov (menej kombinácií)</label></div>
     </div>
@@ -556,6 +565,12 @@ function pripravOpravu(a) {
   });
   document.getElementById("vystupPriecinok").addEventListener("change", overVystup);
   document.getElementById("btnSpustit").onclick = spustiOpravu;
+
+  el.querySelectorAll("#volbaVerzie button").forEach(b => b.onclick = () => {
+    el.querySelectorAll("#volbaVerzie button").forEach(x => x.classList.remove("vybrana"));
+    b.classList.add("vybrana");
+    stavAplikacie.verzie = b.dataset.v;
+  });
 
   document.getElementById("btnVyberVzor").onclick = async () => {
     const c = await vyberCestu({
@@ -648,7 +663,7 @@ function zozbierajVolby() {
     vyska: +document.getElementById("volbaVyska").value || null,
     fps: +document.getElementById("volbaFps").value || 30,
     vzor: document.getElementById("volbaVzor").value || null,
-    orezat: document.getElementById("volbaOrezat").checked,
+    verzie: stavAplikacie.verzie || "obidve",
     rychle_hladanie: document.getElementById("volbaRychle").checked,
   };
 }

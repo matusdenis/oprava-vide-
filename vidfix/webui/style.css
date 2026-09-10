@@ -116,3 +116,5 @@ details summary{cursor:pointer;color:var(--tlmene);font-size:13px;padding:4px 0}
 .dialog h3{margin:0 0 10px}
 .dialog .prehliadac{flex:1;min-height:220px}
 .dialog .popis{margin:10px 0 0}
+
+.disky button.vybrana{background:var(--akcent);color:#fff;border-color:var(--akcent)}

@@ -64,7 +64,7 @@ def prikaz_oprav(args) -> int:
         print(f"Zvolený postup: {strategia}")
     vystup = args.vystup or os.path.join(os.path.dirname(os.path.abspath(args.subor)), "opravene")
     volby = {"sirka": args.sirka, "vyska": args.vyska, "fps": args.fps,
-             "vzor": args.vzor, "orezat": not args.bez_orezania,
+             "vzor": args.vzor, "verzie": args.verzie.replace("-", "_"),
              "rychle_hladanie": not args.dokladne}
     ctx = Ctx(args.subor, vystup, tb, db, volby, log=lambda m: print(m, flush=True))
     vysledok = spusti(strategia, ctx)
@@ -94,7 +94,7 @@ def prikaz_davka(args) -> int:
     print(f"Najdenych {len(subory)} videi.")
     vystup = args.vystup or os.path.join(os.path.abspath(args.priecinok), "opravene")
     volby = {"sirka": args.sirka, "vyska": args.vyska, "fps": args.fps,
-             "vzor": args.vzor, "orezat": not args.bez_orezania,
+             "vzor": args.vzor, "verzie": args.verzie.replace("-", "_"),
              "rychle_hladanie": not args.dokladne}
     v = spusti_davku(subory, vystup, tb, db, volby,
                      log=lambda m: print(m, flush=True), strategia=args.strategia)
@@ -172,7 +172,9 @@ def main(argv=None) -> int:
     po.add_argument("--vyska", type=int)
     po.add_argument("--fps", type=int, default=30)
     po.add_argument("--vzor", help="zdravý súbor z rovnakého zariadenia")
-    po.add_argument("--bez-orezania", action="store_true")
+    po.add_argument("--verzie", default="obidve",
+                    choices=["obidve", "len-orezany", "len-opraveny"],
+                    help="ktoré verzie uložiť (predvolene obidve)")
     po.add_argument("--dokladne", action="store_true",
                     help="dôkladnejšie (a pomalšie) hľadanie parametrov")
 
@@ -185,7 +187,8 @@ def main(argv=None) -> int:
     pd.add_argument("--vyska", type=int)
     pd.add_argument("--fps", type=int, default=30)
     pd.add_argument("--vzor", help="iné video z tej istej kamery (aj poškodené)")
-    pd.add_argument("--bez-orezania", action="store_true")
+    pd.add_argument("--verzie", default="obidve",
+                    choices=["obidve", "len-orezany", "len-opraveny"])
     pd.add_argument("--dokladne", action="store_true")
 
     pp = pod.add_parser("prehlad", help="pretriedi priecinok na zachranitelne a nie")

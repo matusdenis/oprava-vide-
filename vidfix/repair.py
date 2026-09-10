@@ -249,8 +249,15 @@ def strategia_mp4_graft(ctx: Ctx) -> dict:
             if stav.get("_ok"):
                 ctx.log("ffprobe/ffmpeg súbor úspešne prečítal.")
 
+        # Ktoré verzie si používateľ praje. Pri viacgigabajtových videách sa
+        # oplatí nechať len jednu — dve zaberú dvojnásobok miesta.
+        rezim = ctx.options.get("verzie", "obidve")
+        if rezim not in ("obidve", "len_orezany", "len_opraveny"):
+            rezim = "obidve"
+        chce_orezanie = rezim in ("obidve", "len_orezany")
+
         # orezanie poskodeneho zaciatku po prvy klucovy snimok
-        if ma_ffmpeg and ctx.options.get("orezat", True) and video is not None and damage_end:
+        if ma_ffmpeg and chce_orezanie and video is not None and damage_end:
             idx, cas = video.first_intact_keyframe(damage_end)
             if cas is not None:
                 ctx.log(f"Prvý neporušený kľúčový snímok je v čase {cas:.3f} s "
@@ -262,10 +269,16 @@ def strategia_mp4_graft(ctx: Ctx) -> dict:
                     "-y", "-v", "error", "-ss", f"{cas + 0.002:.6f}", "-i", dst,
                     "-c", "copy", "-avoid_negative_ts", "make_zero",
                     "-movflags", "+faststart", trimmed], log=ctx.log)
-                if res["code"] == 0 and os.path.exists(trimmed):
+                if res["code"] == 0 and os.path.exists(trimmed) \
+                        and os.path.getsize(trimmed) > 65536:
                     vystupy.append({"cesta": trimmed,
                                     "popis": f"Čistý súbor bez poškodeného začiatku "
                                              f"(začína v čase {cas:.1f} s)"})
+                    if rezim == "len_orezany":
+                        # celú verziu zmažeme až teraz, keď je orezaná overene hotová
+                        os.remove(dst)
+                        vystupy = [v for v in vystupy if v["cesta"] != dst]
+                        ctx.log("Verziu v plnej dĺžke mažem — praješ si len orezanú.")
                 else:
                     ctx.log("Orezanie sa nepodarilo — ostáva aspoň súbor v plnej dĺžke.")
             else:

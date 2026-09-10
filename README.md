@@ -146,7 +146,7 @@ Užitočné prepínače príkazu `oprav`:
 | `--sirka`, `--vyska` | rozlíšenie pôvodného videa — ak ho poznáš, hľadanie parametrov je rádovo rýchlejšie (v rozhraní sú na to prednastavené tlačidlá: 4K, 2.7K, Full HD, zvislé…) |
 | `--vzor SÚBOR` | zdravý súbor z rovnakého zariadenia (aj úplne iné, krátke video) |
 | `--dokladne` | dôkladnejšie (a pomalšie) hľadanie parametrov obrazu |
-| `--bez-orezania` | nevyrábať čistú verziu bez poškodeného začiatku |
+| `--verzie` | `obidve` (predvolené), `len-orezany`, `len-opraveny` — viď nižšie |
 
 ## Databáza hlavičiek
 
@@ -281,6 +281,20 @@ naň zapísať nie. Vtedy stačí zvoliť priečinok na internom disku.
 * **Ak máš z kamery len jediné video a to má zničený index**, pri H.265 sa
   parametre vziať odkiaľ nedá. Oplatí sa prehľadať zálohy, telefón, staré karty
   aj kôš — postačí akýkoľvek iný záznam z tej istej kamery, hoci zašifrovaný.
+### Ktoré verzie výsledku vznikajú
+
+Stratégia „Nahradenie hlavičky“ vyrobí predvolene dva súbory:
+
+* **`_opraveny`** — pôvodná dĺžka aj veľkosť, na začiatku však tých pár sekúnd,
+  ktoré ransomvér naozaj prepísal (šum alebo trhanie).
+* **`_orezany`** — začína až prvým neporušeným kľúčovým snímkom, teda čistý od
+  začiatku do konca.
+
+Obidve preto, že orezanie musí seknúť na kľúčovom snímku, ktorý môže ležať aj
+niekoľko sekúnd **za** poškodenou časťou — čistá verzia tak môže obetovať aj kus
+dobrého videa. Pri veľkých videách sa oplatí nechať len jednu (voľbou v rozhraní
+alebo prepínačom `--verzie`), lebo dve zaberú dvojnásobok miesta.
+
 * **Orezanie ide len po kľúčový snímok.** Pri kamerách býva každú 1 – 2 sekundy,
   takže strata je malá. Ak sú kľúčové snímky ďaleko od seba, orezanie zoberie
   viac — plná verzia zostáva k dispozícii tiež.
