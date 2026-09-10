@@ -84,6 +84,34 @@ Analýza ukáže, čo v súbore prežilo, kde končí zašifrovaná časť a kto
 sa na daný súbor hodí najlepšie. Cesty nikde nemusíš vypisovať — súbor,
 výstupný priečinok aj vzorové video sa vyberajú klikaním.
 
+### Prehľad priečinka — čo má vôbec zmysel skúšať
+
+Pri stovkách zašifrovaných videí nemá zmysel púšťať sa do nich jedno po druhom.
+Tlačidlo **„Prehľad celého priečinka“** každý súbor rýchlo preverí (asi 0,2 s na
+súbor) a roztriedi ich:
+
+| Stav | Čo to znamená |
+|---|---|
+| **zachrániteľné** | index prežil — obnoví sa obraz aj zvuk |
+| **čiastočne** | index zničený — dá sa vyrezať obraz, zvuk nie |
+| **zašifrované celé** | nezostalo nič pôvodné — zachrániť sa nedá ničím |
+
+Odtiaľ sa dá jedným tlačidlom pustiť oprava všetkých zachrániteľných naraz.
+
+Z príkazového riadka:
+
+```bash
+python3 vidfix.py prehlad ~/videa      # roztriedenie
+python3 vidfix.py rozbor  video.mp4    # podrobná diagnostika jedného súboru
+```
+
+**Prečo niektoré súbory zachrániť nejde — a nezávisí to od kamery.** Ransomvér
+šifruje celý obsah len pri menších súboroch. Pri veľkých (rádovo gigabajtových)
+by mu to trvalo príliš dlho, preto prepíše len začiatok — a práve tie sa dajú
+obnoviť. **Oplatí sa preto začať od najväčších videí.** Program to zisťuje
+meraním, nie odhadom: vzorkuje bloky celého súboru a chí-kvadrát testom overí,
+či sú dáta rovnomerne náhodné (= zašifrované), alebo nesú štruktúru videa.
+
 ### Dávková oprava
 
 Keď prvé video dopadne dobre, tlačidlom **„Opraviť rovnako aj ostatné videá…“**
@@ -244,7 +272,8 @@ naň zapísať nie. Vtedy stačí zvoliť priečinok na internom disku.
   preto vyrobí aj čistú verziu orezanú po prvý neporušený kľúčový snímok
   (bez straty kvality, bez prekódovania).
 * **Ak je súbor zašifrovaný celý, zachrániť sa nedá.** Žiadnym nástrojom.
-  V takom prípade skús priponu a text výkupného na
+  Program to spozná a povie rovno, namiesto toho, aby ťa nechal čakať na
+  neúspech. V takom prípade skús priponu a text výkupného na
   [No More Ransom](https://www.nomoreransom.org/) — pre viaceré rodiny
   ransomvéru existujú bezplatné dešifrovače.
 * **Pri zničenom indexe sa zvuk zachrániť nedá.** Zvukové vzorky sú v súbore
