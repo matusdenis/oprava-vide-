@@ -154,18 +154,20 @@ def prikaz_prehlad(args) -> int:
     priecinok = _over_cestu(args.priecinok, priecinok=True)
     if not priecinok:
         return 2
-    subory = najdi_videa(priecinok)
+    subory = najdi_videa(priecinok, rekurzivne=not args.bez_podpriecinkov)
     if not subory:
         print("V priecinku sa nenasli ziadne videa.", file=sys.stderr)
         return 2
-    print(f"Preveruje sa {len(subory)} suborov…")
+    print(f"Preveruje sa {len(subory)} suborov"
+          f"{'' if args.bez_podpriecinkov else ' (vratane podpriecinkov)'}…")
     v = prehlad_priecinka(subory, log=lambda m: print(m, flush=True))
     znaky = {"dobre": "OK   ", "ciastocne": "CAST ", "nezachranitelne": "NIE  ",
              "chyba": "?    "}
     print()
     for p in v["polozky"]:
+        rel = os.path.relpath(p.get("cesta", p["subor"]), priecinok)
         print(f"  {znaky.get(p.get('verdikt'), '?    ')} "
-              f"{p['subor'][:44]:46s} {p.get('velkost_citatelne', ''):>10s}  "
+              f"{rel[-58:]:60s} {p.get('velkost_citatelne', ''):>10s}  "
               f"{p.get('poznamka', '')}")
     print()
     print(f"Zachranitelnych uplne:   {v['pocty'].get('dobre', 0)}")
@@ -236,10 +238,14 @@ def main(argv=None) -> int:
     pd.add_argument("--vzor", help="iné video z tej istej kamery (aj poškodené)")
     pd.add_argument("--verzie", default="obidve",
                     choices=["obidve", "len-orezany", "len-opraveny"])
+    pd.add_argument("--podpriecinky", action="store_true",
+                    help="opravit aj videa v podpriecinkoch")
     pd.add_argument("--dokladne", action="store_true")
 
     pp = pod.add_parser("prehlad", help="pretriedi priecinok na zachranitelne a nie")
     pp.add_argument("priecinok")
+    pp.add_argument("--bez-podpriecinkov", action="store_true",
+                    help="nehladat v podpriecinkoch")
 
     pr = pod.add_parser("rozbor", help="podrobna diagnostika jedneho suboru")
     pr.add_argument("subor")

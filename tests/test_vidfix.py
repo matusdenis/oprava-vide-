@@ -347,6 +347,30 @@ class TestDavka(ZakladVzorky):
         self.assertEqual(len(subory), 2)
         self.assertTrue(all(c.endswith(".locked") for c in subory))
 
+    def test_najdi_videa_prehlada_podpriecinky(self):
+        # projekty bývajú rozdelené po priečinkoch podľa kamier a dní
+        hlbky = os.path.join(self.davka_dir, "kamera_2", "den2")
+        os.makedirs(hlbky, exist_ok=True)
+        vnoreny = os.path.join(hlbky, "B001.MP4.locked")
+        shutil.copy(najdi_videa(self.davka_dir)[0], vnoreny)
+        try:
+            plytko = najdi_videa(self.davka_dir)
+            hlboko = najdi_videa(self.davka_dir, rekurzivne=True)
+            self.assertNotIn(vnoreny, plytko)
+            self.assertIn(vnoreny, hlboko)
+        finally:
+            shutil.rmtree(os.path.join(self.davka_dir, "kamera_2"))
+
+    def test_najdi_videa_preskoci_vlastne_vysledky(self):
+        vystup = os.path.join(self.davka_dir, "opravene")
+        os.makedirs(vystup, exist_ok=True)
+        hotovy = os.path.join(vystup, "C001_opraveny.mp4")
+        shutil.copy(najdi_videa(self.davka_dir)[0], hotovy)
+        try:
+            self.assertNotIn(hotovy, najdi_videa(self.davka_dir, rekurzivne=True))
+        finally:
+            shutil.rmtree(vystup)
+
     def test_najdi_videa_vynecha_zadane(self):
         vsetky = najdi_videa(self.davka_dir)
         zvysok = najdi_videa(self.davka_dir, vynechaj={vsetky[0]})

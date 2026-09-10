@@ -592,21 +592,57 @@ def spusti(strategy_id: str, ctx: Ctx) -> dict:
 # Davkova oprava
 # ---------------------------------------------------------------------------
 
-def najdi_videa(priecinok: str, vynechaj: set | None = None) -> list:
-    """Zoznam videi v priecinku, vratane premenovanych ransomverom."""
+# Priecinky, do ktorych nema zmysel liezt: vysledky vlastnej prace a systemove
+PRESKOCIT = {"opravene", "opravene-videa", ".Trashes", ".Spotlight-V100",
+             ".fseventsd", "$RECYCLE.BIN", "System Volume Information"}
+
+
+def najdi_videa(priecinok: str, vynechaj: set | None = None,
+                rekurzivne: bool = False, max_hlbka: int = 6,
+                max_suborov: int = 20000) -> list:
+    """Zoznam videi v priecinku, vratane premenovanych ransomverom.
+
+    S `rekurzivne=True` prejde aj podpriecinky - projekty byvaju rozdelene po
+    priecinkoch podla kamier a dni, takze bez toho by prehlad nasiel len tie
+    subory, ktore lezia volne navrchu.
+    """
     vynechaj = {os.path.abspath(c) for c in (vynechaj or set())}
+    koren = os.path.abspath(priecinok)
     out = []
-    try:
-        with os.scandir(priecinok) as it:
-            for e in it:
-                if not e.is_file() or os.path.abspath(e.path) in vynechaj:
+
+    def pridaj(cesta: str):
+        try:
+            if os.path.getsize(cesta) > (64 << 10):
+                out.append(cesta)
+        except OSError:
+            pass
+
+    if not rekurzivne:
+        try:
+            with os.scandir(priecinok) as it:
+                for e in it:
+                    if e.is_file() and os.path.abspath(e.path) not in vynechaj \
+                            and _mozne_video(e.path):
+                        pridaj(e.path)
+        except OSError:
+            return []
+    else:
+        for korenovy, podpriecinky, subory in os.walk(priecinok):
+            hlbka = korenovy[len(koren):].count(os.sep)
+            if hlbka >= max_hlbka:
+                podpriecinky[:] = []
+            podpriecinky[:] = [d for d in podpriecinky
+                               if not d.startswith(".") and d not in PRESKOCIT]
+            for nazov in subory:
+                cesta = os.path.join(korenovy, nazov)
+                if os.path.abspath(cesta) in vynechaj or nazov.startswith("."):
                     continue
-                if _mozne_video(e.path) and os.path.getsize(e.path) > (64 << 10):
-                    out.append(e.path)
-    except OSError:
-        return []
-    out.sort(key=lambda c: os.path.basename(c).lower())
-    return out
+                if _mozne_video(cesta):
+                    pridaj(cesta)
+            if len(out) >= max_suborov:
+                break
+    out.sort(key=lambda c: c.lower())
+    return out[:max_suborov]
 
 
 def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,

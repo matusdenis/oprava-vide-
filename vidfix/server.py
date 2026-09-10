@@ -274,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not os.path.isdir(priecinok):
                     self._json({"chyba": "Priečinok neexistuje."}, 400)
                 else:
-                    subory = najdi_videa(priecinok)
+                    subory = najdi_videa(priecinok, rekurzivne=True)
                     st = self.stav
                     job = st.jobs.spusti(
                         f"Prehľad: {len(subory)} súborov",
