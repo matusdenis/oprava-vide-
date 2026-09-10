@@ -764,6 +764,50 @@ def damage_map(mm, track, struct_start: int, max_checks: int = 4000, hevc: bool 
     }
 
 
+def codec_parameter_sets(path: str) -> bytes:
+    """Vytiahne parametre obrazu zo zdraveho MP4/MOV - pre H.264 aj H.265.
+
+    Ak ma pouzivatel k dispozicii hoci len jeden neposkodeny subor z rovnakeho
+    zariadenia (aj uplne ine, kratke video), su v nom presne tie parametre,
+    ktore poskodenemu suboru chybaju. Pre H.264 su v boxe `avcC`, pre H.265
+    v boxe `hvcC` - ten ma iné rozlozenie, preto sa citaju osobitne.
+    """
+    f, mm, size = open_mm(path)
+    try:
+        boxes, _ = chain_from(mm, 0, size)
+        moov = next((b for b in boxes if b.type == b"moov"), None)
+        if moov is None:
+            return b""
+        moov.children = parse_tree(mm, moov.data_offset, moov.end, size)
+        out = []
+        for hvcc in moov.find_all(b"hvcC"):
+            d = mm[hvcc.data_offset:hvcc.end]
+            if len(d) < 23:
+                continue
+            pos = 22                      # pevna hlavicka hvcC
+            pocet_poli = d[pos]
+            pos += 1
+            for _ in range(pocet_poli):
+                if pos + 3 > len(d):
+                    break
+                pos += 1                  # priznaky + typ NAL jednotky
+                pocet = int.from_bytes(d[pos:pos + 2], "big")
+                pos += 2
+                for _ in range(pocet):
+                    if pos + 2 > len(d):
+                        break
+                    n = int.from_bytes(d[pos:pos + 2], "big")
+                    pos += 2
+                    out.append(b"\x00\x00\x00\x01" + d[pos:pos + n])
+                    pos += n
+        if out:
+            return b"".join(out)
+        return avcc_parameter_sets(path)
+    finally:
+        mm.close()
+        f.close()
+
+
 def avcc_parameter_sets(path: str) -> bytes:
     """Vytiahne SPS/PPS z boxu `avcC` v zdravom MP4/MOV subore.
 

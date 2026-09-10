@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import struct
+from collections import Counter
 
 TS_PACKET_SIZES = (188, 192, 204, 208)
 START_CODE = b"\x00\x00\x00\x01"
@@ -185,8 +186,14 @@ def nal_here(mm, p: int, size: int, hevc: bool = False, min_len: int = 1,
     allowed = VIDEO_NAL_TYPES_H265 if hevc else VIDEO_NAL_TYPES_H264
     if strict_type and t not in allowed:
         return None
-    if not strict_type and (t == 0 or (not hevc and t > 23)):
-        return None
+    # V H.264 je typ 0 nepouzity, v H.265 je to naopak bezny snimok (TRAIL_N),
+    # takze sa nesmie zahadzovat - inak sa retaz NAL jednotiek hned rozpadne.
+    if not strict_type:
+        if hevc:
+            if t > 40:
+                return None
+        elif t == 0 or t > 23:
+            return None
     if deep and not validate_nal_payload(mm[p + 4:p + 4 + min(n, 64)], hevc):
         return None
     return n
@@ -265,17 +272,9 @@ SCAN_PASSES = (
 )
 
 
-def find_nal_stream(mm, size: int, hint: int = 0, hevc: bool = False,
-                    min_len: int = 256, log=None, limit: int | None = None,
-                    max_candidates: int = 40000) -> dict | None:
-    """Najde prvu skutocnu video vzorku od pozicie `hint`.
-
-    Vzorky nie su v subore nijako zarovnane, preto sa hlada bajt po bajte.
-    Rychlost zachranuje predfilter (dlzkovy prefix zacina nulovym bajtom) a
-    kazdy kandidat sa overi prechadzkou - az ked od neho vyjde dlhy sled NAL
-    jednotiek s takmer uplnym pokrytim, ide o skutocny zaciatok streamu.
-    """
-    end = size if limit is None else min(size, limit)
+def _hladaj_pre_kodek(mm, size: int, hint: int, hevc: bool, min_len: int, log,
+                      end: int, max_candidates: int) -> dict | None:
+    """Prehľadá súbor pri jednom konkrétnom kodeku."""
     for scan in SCAN_PASSES:
         pos = max(0, hint)
         tried = 0
@@ -289,19 +288,52 @@ def find_nal_stream(mm, size: int, hint: int = 0, hevc: bool = False,
                 tried += 1
                 st = walk_stats(mm, idx, size, hevc, max_len=scan["max_len"])
                 if st["nals"] >= scan["min_nals"] and st["coverage"] >= scan["min_coverage"]:
-                    if log:
-                        log(f"  začiatok obrazového streamu na offsete {idx} "
-                            f"({st['nals']} NAL jednotiek, pokrytie "
-                            f"{st['coverage'] * 100:.1f} %, kolo: {scan['popis']})")
-                    return {"offset": idx, "max_len": scan["max_len"],
-                            "statistika": st, "kolo": scan["popis"]}
+                    return {"offset": idx, "max_len": scan["max_len"], "hevc": hevc,
+                            "statistika": st, "kolo": scan["popis"],
+                            "skore": st["nals"] * st["coverage"]}
             pos = idx + 1
             if log and pos - reported > (32 << 20):
                 reported = pos
                 log(f"  prehľadaných {pos // (1 << 20)} MiB…")
-        if log:
-            log(f"  kolo „{scan['popis']}“ nenašlo začiatok, skúšam voľnejšie kritériá")
     return None
+
+
+def find_nal_stream(mm, size: int, hint: int = 0, hevc: bool | None = None,
+                    min_len: int = 256, log=None, limit: int | None = None,
+                    max_candidates: int = 40000) -> dict | None:
+    """Nájde prvú skutočnú vzorku obrazu od pozície `hint`.
+
+    Vzorky nie sú v súbore nijako zarovnané, preto sa hľadá bajt po bajte.
+    Rýchlosť zachraňuje predfilter (dĺžkový prefix začína nulovým bajtom) a
+    každý kandidát sa overí prechádzkou — až keď od neho vyjde dlhý sled NAL
+    jednotiek s takmer úplným pokrytím, ide o skutočný začiatok streamu.
+
+    Keď kodek nepoznáme (`hevc=None`, index so zápisom kodeku je zničený),
+    prehľadá sa súbor pre H.264 aj H.265 a vyhrá ten, ktorý dá dlhší a súvislejší
+    stream. Rozhodovať sa pri prvom kandidátovi nestačí: kontrola H.265 je
+    zhovievavejšia, takže by na náhodnej zhode zvíťazila aj v súbore H.264.
+    """
+    end = size if limit is None else min(size, limit)
+    if hevc is not None:
+        return _hladaj_pre_kodek(mm, size, hint, bool(hevc), min_len, log, end,
+                                 max_candidates)
+    vysledky = []
+    for je_hevc in (False, True):
+        r = _hladaj_pre_kodek(mm, size, hint, je_hevc, min_len, log, end, max_candidates)
+        if r:
+            vysledky.append(r)
+            if log:
+                st = r["statistika"]
+                log(f"  {'H.265' if je_hevc else 'H.264'}: nález na offsete "
+                    f"{r['offset']} ({st['nals']} NAL jednotiek, pokrytie "
+                    f"{st['coverage'] * 100:.1f} %)")
+    if not vysledky:
+        return None
+    najlepsi = max(vysledky, key=lambda r: (round(r["skore"]), -r["offset"]))
+    if log:
+        log(f"  začiatok obrazového streamu na offsete {najlepsi['offset']} — kodek "
+            f"{'H.265/HEVC' if najlepsi['hevc'] else 'H.264'}")
+    return najlepsi
 
 
 def find_nal_stream_start(mm, size: int, **kw) -> int | None:
@@ -377,7 +409,8 @@ def collect_parameter_sets(mm, start: int, end: int, hevc: bool = False,
     return b"".join(out)
 
 
-def parameter_sets_anywhere(path: str, max_nals: int = 400000) -> bytes:
+def parameter_sets_anywhere(path: str, max_nals: int = 400000,
+                            hevc: bool = False) -> bytes:
     """Najde v surovom Annex-B streame prvu platnu dvojicu SPS + PPS.
 
     Kluc k zachrane tokov, ktorym ransomver zobral zaciatok: parametre sa v
@@ -386,7 +419,9 @@ def parameter_sets_anywhere(path: str, max_nals: int = 400000) -> bytes:
     zaciatok a prehravac uz vie obraz dekodovat.
     """
     import mmap as _mmap
-    sps = pps = None
+    najdene = {}
+    # H.265 potrebuje okrem SPS a PPS aj VPS
+    chcene = (32, 33, 34) if hevc else (7, 8)
     with open(path, "rb") as f:
         if os.path.getsize(path) < 8:
             return b""
@@ -402,20 +437,19 @@ def parameter_sets_anywhere(path: str, max_nals: int = 400000) -> bytes:
                 nxt = mm.find(b"\x00\x00\x01", idx + 3)
                 nal = mm[idx + 3:nxt if nxt > 0 else min(len(mm), idx + 3 + (1 << 20))]
                 if nal:
-                    t = nal[0] & 0x1F
-                    if t == 7 and sps is None and plausible_sps(bytes(nal)):
-                        sps = bytes(nal)
-                    elif t == 8 and pps is None and 2 <= len(nal) <= 256:
-                        pps = bytes(nal)
-                if sps and pps:
+                    t = ((nal[0] >> 1) & 0x3F) if hevc else (nal[0] & 0x1F)
+                    if t in chcene and t not in najdene:
+                        if validate_nal_payload(bytes(nal), hevc):
+                            najdene[t] = bytes(nal)
+                if len(najdene) == len(chcene):
                     break
                 if nxt < 0:
                     break
                 pos = nxt
         finally:
             mm.close()
-    if sps and pps:
-        return START_CODE + sps + START_CODE + pps
+    if len(najdene) == len(chcene):
+        return b"".join(START_CODE + najdene[t] for t in chcene)
     return b""
 
 
@@ -562,6 +596,114 @@ def plausible_sps(nal: bytes) -> dict | None:
     return info
 
 
+def find_nal_in_annexb(data: bytes, nal_type: int, hevc: bool = False) -> bytes | None:
+    """Nájde v surovom Annex-B streame prvú NAL jednotku daného typu."""
+    pos = 0
+    while True:
+        idx = data.find(b"\x00\x00\x01", pos)
+        if idx < 0:
+            return None
+        nxt = data.find(b"\x00\x00\x01", idx + 3)
+        nal = data[idx + 3:nxt if nxt > 0 else len(data)]
+        if nal:
+            t = ((nal[0] >> 1) & 0x3F) if hevc else (nal[0] & 0x1F)
+            if t == nal_type:
+                return nal
+        if nxt < 0:
+            return None
+        pos = nxt
+
+
+def only_parameter_sets(data: bytes, hevc: bool = False) -> bytes:
+    """Ponechá zo streamu len parametre obrazu (VPS/SPS/PPS).
+
+    Vzorové súbory obsahujú aj rozsiahle SEI bloky s údajmi o kodéri, ktoré sú
+    na dekódovanie zbytočné a zbytočne zaťažujú výsledok.
+    """
+    chcene = (32, 33, 34) if hevc else (7, 8)
+    out = []
+    pos = 0
+    while True:
+        idx = data.find(b"\x00\x00\x01", pos)
+        if idx < 0:
+            break
+        nxt = data.find(b"\x00\x00\x01", idx + 3)
+        nal = data[idx + 3:nxt if nxt > 0 else len(data)]
+        if nal and (((nal[0] >> 1) & 0x3F) if hevc else (nal[0] & 0x1F)) in chcene:
+            out.append(START_CODE + nal)
+        if nxt < 0:
+            break
+        pos = nxt
+    return b"".join(out) if out else data
+
+
+def parse_hevc_sps(nal: bytes) -> dict | None:
+    """Vytiahne z SPS pre H.265/HEVC rozlisenie, profil a uroven.
+
+    Struktura podla ITU-T H.265, sekcia 7.3.2.2. Pred rozmermi obrazu lezi
+    blok profile_tier_level pevnej dlzky, ktory treba presne preskocit.
+    """
+    try:
+        if len(nal) < 12 or ((nal[0] >> 1) & 0x3F) != 33:
+            return None
+        r = _BitReader(_unescape(nal[2:]))
+        r.bits(4)                       # sps_video_parameter_set_id
+        max_sub = r.bits(3)             # sps_max_sub_layers_minus1
+        r.bit()                         # sps_temporal_id_nesting_flag
+        # profile_tier_level(1, max_sub)
+        r.bits(2)                       # general_profile_space
+        r.bit()                         # general_tier_flag
+        profile_idc = r.bits(5)
+        r.bits(32)                      # general_profile_compatibility_flags
+        r.bits(48)                      # general_constraint_indicator_flags
+        level_idc = r.bits(8)
+        pod_profil, pod_uroven = [], []
+        for _ in range(max_sub):
+            pod_profil.append(r.bit())
+            pod_uroven.append(r.bit())
+        if max_sub > 0:
+            for _ in range(max_sub, 8):
+                r.bits(2)               # reserved_zero_2bits
+        for i in range(max_sub):
+            if pod_profil[i]:
+                r.bits(88)
+            if pod_uroven[i]:
+                r.bits(8)
+        r.ue()                          # sps_seq_parameter_set_id
+        chroma = r.ue()
+        if chroma == 3:
+            r.bit()                     # separate_colour_plane_flag
+        sirka = r.ue()                  # pic_width_in_luma_samples
+        vyska = r.ue()                  # pic_height_in_luma_samples
+        if r.bit():                     # conformance_window_flag
+            sub_w = 2 if chroma in (1, 2) else 1
+            sub_h = 2 if chroma == 1 else 1
+            sirka -= (r.ue() + r.ue()) * sub_w
+            vyska -= (r.ue() + r.ue()) * sub_h
+        nazvy = {1: "Main", 2: "Main 10", 3: "Main Still Picture", 4: "Range Extensions"}
+        return {"profile_idc": profile_idc, "profil": nazvy.get(profile_idc, str(profile_idc)),
+                "level_idc": level_idc, "uroven": f"{level_idc / 30:.1f}",
+                "sirka": sirka, "vyska": vyska}
+    except (EOFError, ValueError, IndexError):
+        return None
+
+
+def plausible_hevc_sps(nal: bytes) -> dict | None:
+    """Vrati rozparsovane SPS pre H.265, len ak su hodnoty vierohodne."""
+    info = parse_hevc_sps(nal)
+    if not info:
+        return None
+    if not (1 <= info["profile_idc"] <= 11):
+        return None
+    if not (128 <= info["sirka"] <= 16384 and 96 <= info["vyska"] <= 16384):
+        return None
+    if info["sirka"] % 2 or info["vyska"] % 2:
+        return None
+    if not (30 <= info["level_idc"] <= 255):
+        return None
+    return info
+
+
 def find_sps_in_annexb(data: bytes) -> bytes | None:
     """Najde prvu SPS jednotku v surovom Annex-B streame."""
     pos = 0
@@ -589,10 +731,22 @@ def validate_nal_payload(nal: bytes, hevc: bool = False) -> bool:
         return False
     if hevc:
         t = (nal[0] >> 1) & 0x3F
-        if t in (32, 33, 34):
-            return len(nal) >= 4
-        if t <= 21:
-            return len(nal) >= 3
+        try:
+            if t == 33:                       # SPS
+                return bool(plausible_hevc_sps(nal))
+            if t == 34:                       # PPS
+                r = _BitReader(_unescape(nal[2:8]))
+                return r.ue() <= 63 and r.ue() <= 15
+            if t == 32:                       # VPS
+                return len(nal) >= 12
+            if t <= 21:                       # rez obrazu
+                r = _BitReader(_unescape(nal[2:10]))
+                r.bit()                       # first_slice_segment_in_pic_flag
+                if 16 <= t <= 23:
+                    r.bit()                   # no_output_of_prior_pics_flag
+                return r.ue() <= 63           # slice_pic_parameter_set_id
+        except (EOFError, ValueError, IndexError):
+            return False
         return True
     t = nal[0] & 0x1F
     try:
@@ -627,43 +781,68 @@ def validate_nal_payload(nal: bytes, hevc: bool = False) -> bool:
 
 
 def zero_density(mm, offset: int, block: int = 65536) -> float:
-    """Podiel nulovych bajtov v bloku.
-
-    Sifrovane data su rovnomerne nahodne, takze nul je presne 1/256 (0,39 %).
-    Komprimovane video ma nul podstatne viac (bezne 0,8 az 3 %). Rozdiel je pri
-    64 KiB bloku statisticky velmi vyrazny, takze sa da spolahlivo urcit, kde
-    zasifrovana cast konci.
-    """
+    """Podiel nulovych bajtov v bloku (doplnkovy udaj do prehladu)."""
     data = mm[offset:offset + block]
     if not data:
         return 0.0
     return data.count(0) / len(data)
 
 
-def estimate_encrypted_prefix(mm, size: int, block: int = 65536,
-                              threshold: float = 0.0060, log=None) -> dict:
-    """Odhadne dlzku zasifrovaneho zaciatku podla podielu nulovych bajtov."""
-    n_blocks = max(1, size // block)
+def chi2_rovnomernosti(mm, offset: int, block: int = 262144) -> float:
+    """Chi-kvadrat test rovnomernosti rozlozenia bajtov v bloku.
+
+    Sifrovane data su dokonale rovnomerne: kazda hodnota bajtu ma rovnaku
+    pravdepodobnost, takze vyjde hodnota okolo 255 (pocet stupnov volnosti)
+    s odchylkou asi 23 - a to bez ohladu na velkost bloku. Komprimovane video
+    rovnomerne nie je nikdy a jeho odchylka rastie s velkostou bloku, preto sa
+    pri 256 KiB oba pripady oddelia velmi spolahlivo:
+
+        sifrovane        230 az 275
+        video H.265      400 az 1000     (najhustejsi pripad)
+        video H.264   50 000 a viac
+
+    Predosla verzia porovnavala len pocet nulovych bajtov, co pri H.265 od
+    sifrovanych dat neodlisilo takmer nic.
+    """
+    data = mm[offset:offset + block]
+    if len(data) < 4096:
+        return 0.0
+    pocty = Counter(data)
+    ocakavane = len(data) / 256.0
+    return sum((pocty.get(b, 0) - ocakavane) ** 2 / ocakavane for b in range(256))
+
+
+# 255 stupnov volnosti, odchylka asi 22.6 - prah je vzdialeny pribline styri
+# odchylky nad priemerom, takze nahodne prekrocenie je prakticky vylucene.
+PRAH_CHI2 = 350.0
+
+
+def estimate_encrypted_prefix(mm, size: int, block: int = 262144,
+                              threshold: float = PRAH_CHI2, log=None,
+                              max_blocks: int = 1024) -> dict:
+    """Odhadne dlzku zasifrovaneho zaciatku podla rovnomernosti rozlozenia bajtov."""
+    n_blocks = min(max(1, size // block), max_blocks)
     first_good = None
-    densities = []
-    for i in range(min(n_blocks, 4096)):
-        d = zero_density(mm, i * block, block)
-        densities.append(round(d, 5))
-        if d >= threshold:
-            # potvrdenie: nasledujuce bloky musia byt tiez "nesifrovane"
-            confirm = [zero_density(mm, (i + k) * block, block) for k in range(1, 4)
-                       if (i + k) * block < size]
-            if sum(1 for c in confirm if c >= threshold) >= max(1, len(confirm) - 1):
+    hodnoty = []
+    for i in range(n_blocks):
+        h = chi2_rovnomernosti(mm, i * block, block)
+        hodnoty.append(round(h, 1))
+        if h >= threshold:
+            # potvrdenie: dalsie bloky musia byt tiez "nesifrovane"
+            confirm = [chi2_rovnomernosti(mm, (i + k) * block, block)
+                       for k in range(1, 4) if (i + k) * block + 4096 < size]
+            if not confirm or sum(1 for c in confirm if c >= threshold) >= len(confirm) - 1:
                 first_good = i * block
                 break
     if first_good is None:
         return {"koniec": None, "spolahlivost": "nízka",
-                "poznamka": "Nepodarilo sa nájsť neporušenú časť — súbor môže byť zašifrovaný celý.",
-                "hustoty": densities[:64]}
+                "poznamka": ("Nepodarilo sa nájsť neporušenú časť — súbor môže byť "
+                             "zašifrovaný celý."),
+                "hodnoty": hodnoty[:64]}
     if log:
         log(f"  štatistický odhad konca zašifrovanej časti: {first_good} B")
-    return {"koniec": first_good, "spolahlivost": "dobra" if first_good else "dobra",
-            "prah": threshold, "hustoty": densities[:64]}
+    return {"koniec": first_good, "spolahlivost": "dobrá", "prah": threshold,
+            "hodnoty": hodnoty[:64]}
 
 
 # ---------------------------------------------------------------------------

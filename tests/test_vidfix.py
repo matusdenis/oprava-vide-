@@ -273,5 +273,58 @@ class TestZdravySubor(ZakladVzorky):
         self.assertEqual((info["sirka"], info["vyska"]), (640, 360))
 
 
+@potrebuje_ffmpeg
+class TestH265(ZakladVzorky):
+    """Kamery a drony nakrúcajú aj v H.265 — kodek sa musí rozpoznať sám."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.zdroj_h265 = vyrob_video(os.path.join(cls.dir, "zdrave_h265.mp4"),
+                                     sekundy=8, sirka=1280, vyska=720,
+                                     faststart=True, kodek="h265", keyint=25)
+
+    def setUp(self):
+        self.poskodeny = posifruj_zaciatok(self.zdroj_h265,
+                                           self.out("h265_poskodene.mp4"), 256 * 1024)
+
+    def test_sps_h265_sa_da_rozparsovat(self):
+        ps = mp4.codec_parameter_sets(self.zdroj_h265)
+        sps = carve.find_nal_in_annexb(ps, 33, hevc=True)
+        info = carve.plausible_hevc_sps(sps)
+        self.assertIsNotNone(info, "SPS pre H.265 sa nepodarilo rozparsovať")
+        self.assertEqual((info["sirka"], info["vyska"]), (1280, 720))
+
+    def test_odhad_hranice_funguje_aj_pri_h265(self):
+        # H.265 má oveľa hustejšie dáta než H.264 — počítanie núl na to nestačilo
+        f, mm, size = mp4.open_mm(self.poskodeny)
+        try:
+            est = carve.estimate_encrypted_prefix(mm, size)
+        finally:
+            mm.close()
+            f.close()
+        self.assertIsNotNone(est["koniec"], "zašifrovaná časť sa nenašla")
+        self.assertLessEqual(abs(est["koniec"] - 256 * 1024), 256 * 1024)
+
+    def test_kodek_sa_rozpozna_sam(self):
+        f, mm, size = mp4.open_mm(self.poskodeny)
+        try:
+            najdene = carve.find_nal_stream(mm, size, hint=256 * 1024)
+        finally:
+            mm.close()
+            f.close()
+        self.assertIsNotNone(najdene, "obrazový stream sa nenašiel")
+        self.assertTrue(najdene["hevc"], "kodek mal byť rozpoznaný ako H.265")
+
+    def test_zachrana_so_vzorom_da_prehratelny_subor(self):
+        ctx = Ctx(self.poskodeny, self.out("vysledok_h265"), TB, HeaderDB(),
+                  {"fps": 25, "vzor": self.zdroj_h265})
+        v = spusti("mp4_carve", ctx)
+        self.assertTrue(v["ok"])
+        mp4y = [o for o in v["vystupy"] if o["cesta"].endswith(".mp4")]
+        self.assertTrue(mp4y, "očakával som prehrateľné MP4 na výstupe")
+        self.assertGreater(os.path.getsize(mp4y[0]["cesta"]), 65536)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -13,7 +13,7 @@ from vidfix.tools import Toolbox  # noqa: E402
 
 def vyrob_video(cesta: str, sekundy: int = 12, sirka: int = 640, vyska: int = 360,
                 faststart: bool = False, kontajner: str = "mp4",
-                keyint: int = 30) -> str:
+                keyint: int = 30, kodek: str = "h264") -> str:
     """Vyrobi zdrave testovacie video pomocou ffmpeg."""
     tb = Toolbox()
     if not tb.path("ffmpeg"):
@@ -21,9 +21,12 @@ def vyrob_video(cesta: str, sekundy: int = 12, sirka: int = 640, vyska: int = 36
     args = ["-y", "-v", "error",
             "-f", "lavfi", "-i", f"testsrc2=size={sirka}x{vyska}:rate=25",
             "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-            "-t", str(sekundy), "-c:v", "libx264", "-preset", "ultrafast",
-            "-pix_fmt", "yuv420p", "-g", str(keyint),
-            "-c:a", "aac", "-shortest"]
+            "-t", str(sekundy), "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"]
+    if kodek == "h265":
+        args += ["-c:v", "libx265", "-preset", "ultrafast", "-tag:v", "hvc1",
+                 "-x265-params", f"keyint={keyint}:log-level=none"]
+    else:
+        args += ["-c:v", "libx264", "-preset", "ultrafast", "-g", str(keyint)]
     if kontajner == "mp4" and faststart:
         args += ["-movflags", "+faststart"]
     args += [cesta]

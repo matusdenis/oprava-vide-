@@ -77,6 +77,37 @@ def _copy_with_prefix(src: str, dst: str, prefix: bytes, zero_until: int = 0,
     return written
 
 
+def _do_mp4(ctx: Ctx, raw: str, dst: str, hevc: bool, fps: int) -> dict | None:
+    """Zabalí surový obrazový stream do MP4, aby sa dal normálne prehrať.
+
+    Najprv sa skúsi prebalenie bez straty kvality. To však pri streame bez
+    pôvodnej hlavičky často zlyhá — ffmpeg nevie odvodiť parametre a zapíše
+    prázdny súbor. Vtedy sa video prekóduje: je to stratové a pomalšie, ale
+    výsledok sa dá otvoriť v akomkoľvek prehrávači, čo je pri záchrane dát
+    podstatnejšie než dokonalá kvalita.
+    """
+    vstup = ["-r", str(fps), "-f", "hevc" if hevc else "h264", "-i", raw]
+    res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error"] + vstup
+                          + ["-c", "copy", "-movflags", "+faststart", dst], log=None)
+    if res["code"] == 0 and os.path.exists(dst) and os.path.getsize(dst) > 65536:
+        return {"cesta": dst, "popis": f"Zachránené video ({fps} snímkov/s, "
+                                       f"bez straty kvality)"}
+    if os.path.exists(dst):
+        os.remove(dst)
+    ctx.log("Prebalenie bez straty kvality neuspelo (stream nemá pôvodnú hlavičku) "
+            "— prekódovávam, aby sa výsledok dal otvoriť v bežnom prehrávači…")
+    res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error"] + vstup
+                          + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                             "-pix_fmt", "yuv420p", "-movflags", "+faststart", dst],
+                          log=None)
+    if res["code"] == 0 and os.path.exists(dst) and os.path.getsize(dst) > 65536:
+        return {"cesta": dst, "popis": f"Zachránené video ({fps} snímkov/s, "
+                                       f"prekódované do H.264)"}
+    if os.path.exists(dst):
+        os.remove(dst)
+    return None
+
+
 def strategia_mp4_graft(ctx: Ctx) -> dict:
     """Nahradi zasifrovany zaciatok novou hlavickou (index moov prezil).
 
@@ -284,18 +315,29 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
         hint = ctx.options.get("hranica_poskodenia")
         if hint is None:
             hint = est.get("koniec") or 0
-        hevc = bool(ctx.options.get("hevc"))
-        ctx.log(f"Hľadám začiatok obrazového streamu od offsetu {hint} …")
-        found = carve.find_nal_stream(mm, size, hint=hint, hevc=hevc, log=ctx.log)
+        # Kodek vopred nepoznáme — index, v ktorom bol zapísaný, je zničený.
+        # Preto sa skúša H.264 aj H.265 a vyhrá ten, ktorý dáva súvislý stream.
+        volba_hevc = ctx.options.get("hevc")
+        ctx.log(f"Hľadám začiatok obrazového streamu od offsetu {hint} "
+                f"(kodek {'H.265' if volba_hevc else 'H.264'} podľa voľby)…"
+                if volba_hevc is not None else
+                f"Hľadám začiatok obrazového streamu od offsetu {hint} "
+                f"(kodek rozpoznám automaticky)…")
+        found = carve.find_nal_stream(mm, size, hint=hint, hevc=volba_hevc, log=ctx.log)
         if not found and hint:
             ctx.log("Skúšam hľadať od začiatku súboru …")
-            found = carve.find_nal_stream(mm, size, hint=0, hevc=hevc, log=ctx.log)
+            found = carve.find_nal_stream(mm, size, hint=0, hevc=volba_hevc, log=ctx.log)
         if not found:
             raise RuntimeError(
                 "V súbore sa nenašiel žiadny súvislý obrazový stream. Súbor je "
                 "pravdepodobne zašifrovaný celý, alebo používa iný kodek ako H.264/H.265.")
 
-        raw = ctx.out("vyrezany", ".h264" if not hevc else ".h265")
+        hevc = found["hevc"]
+        ctx.log(f"Rozpoznaný kodek: {'H.265 / HEVC' if hevc else 'H.264 / AVC'}")
+        if hint and found["offset"] > hint + (32 << 20):
+            ctx.log("Pozor: stream sa našiel oveľa ďalej, než kam siaha zašifrovaná "
+                    "časť — je možné, že poškodenie je rozsiahlejšie.")
+        raw = ctx.out("vyrezany", ".h265" if hevc else ".h264")
         params = carve.collect_parameter_sets(mm, found["offset"], size, hevc=hevc)
         if params:
             ctx.log(f"Parametre SPS/PPS sa našli priamo v tele streamu ({len(params)} B).")
@@ -312,22 +354,23 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
 
     # Hotove parametre, ktore stoja za vyskusanie ako prve: najdene priamo v
     # tele streamu a vytiahnute zo zdraveho suboru z rovnakeho zariadenia.
-    with open(raw, "rb") as fi:
-        vzorka = fi.read(16 << 20)
     extra = []
-    if not hevc:
-        sps = carve.find_sps_in_annexb(vzorka)
-        info = carve.plausible_sps(sps) if sps else None
-        if info:
-            ctx.log(f"V tele streamu sú parametre {info['sirka']}×{info['vyska']}, "
-                    f"profil {info['profil']} — vyskúšam ich ako prvé.")
-            extra.append({"popis": f"parametre z tela streamu "
-                                   f"({info['sirka']}x{info['vyska']})",
-                          "blob": b"", "kandidat": None})
+    # Parametre sa v streame opakujú pri každom kľúčovom snímku, takže aj keď
+    # prvý výskyt padol za obeť šifrovaniu, ďalší býva o kus ďalej.
+    vlastne = carve.parameter_sets_anywhere(raw, hevc=hevc)
+    if vlastne:
+        sps = (carve.find_sps_in_annexb(vlastne) if not hevc
+               else carve.find_nal_in_annexb(vlastne, 33, hevc=True))
+        info = ((carve.plausible_hevc_sps(sps) if hevc else carve.plausible_sps(sps))
+                if sps else None)
+        popis = (f"parametre z tela streamu ({info['sirka']}×{info['vyska']}, "
+                 f"{info['profil']})" if info else "parametre z tela streamu")
+        ctx.log(f"V tele streamu sa našli {popis} — použijem ich.")
+        extra.append({"popis": popis, "blob": vlastne, "kandidat": None})
     vzor = ctx.options.get("vzor")
     if vzor and os.path.exists(vzor):
         try:
-            ps = mp4.avcc_parameter_sets(vzor)
+            ps = carve.only_parameter_sets(mp4.codec_parameter_sets(vzor), hevc)
             if ps:
                 ctx.log(f"Zo vzorového súboru {os.path.basename(vzor)} vytiahnuté "
                         f"parametre ({len(ps)} B) — vyskúšam ich ako prvé.")
@@ -339,7 +382,12 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
 
     hlavicka = b""
     najdene = None
-    if not hevc:
+    if hevc and not extra:
+        ctx.log("Stream je H.265 a parametre sa v ňom nenašli. Poskladať ich naslepo "
+                "sa pri H.265 nedá — potrebujem zdravé video z tej istej kamery "
+                "(stačí akékoľvek, aj krátke). Zadaj ho do poľa „Zdravý vzorový "
+                "súbor“ a spusti opravu znova.")
+    if extra or not hevc:
         rozlisenia = None
         if ctx.options.get("sirka") and ctx.options.get("vyska"):
             rozlisenia = [(int(ctx.options["sirka"]), int(ctx.options["vyska"]))]
@@ -347,7 +395,7 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
         najdene = h264_params.find_best_headers(
             ctx.toolbox, raw, ctx.outdir, resolutions=rozlisenia,
             quick=bool(ctx.options.get("rychle_hladanie", True)),
-            log=ctx.log, extra=extra)
+            log=ctx.log, extra=extra, hevc=hevc)
         if najdene and najdene["vysledok"]["skore"] > 0:
             hlavicka = najdene["hlavicka"]
             parametre_ok = True
@@ -360,7 +408,7 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
 
     final_raw = raw
     if hlavicka:
-        final_raw = ctx.out("vyrezany_s_hlavickou", ".h264")
+        final_raw = ctx.out("vyrezany_s_hlavickou", ".h265" if hevc else ".h264")
         with open(final_raw, "wb") as fo:
             fo.write(hlavicka)
             with open(raw, "rb") as fi:
@@ -369,16 +417,12 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
 
     fps = ctx.options.get("fps") or 30
     dst = ctx.out("zachraneny", ".mp4")
-    res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error", "-r", str(fps),
-                                     "-f", "hevc" if hevc else "h264", "-i", final_raw,
-                                     "-c", "copy", "-movflags", "+faststart", dst],
-                          log=ctx.log)
-    if res["code"] == 0 and os.path.exists(dst) and os.path.getsize(dst) > 1024:
-        vystupy.append({"cesta": dst, "popis": f"Zachránené video ({fps} snímkov/s)"})
-    elif os.path.exists(dst) and os.path.getsize(dst) <= 1024:
-        os.remove(dst)
-        ctx.log("Prebalenie do MP4 sa nepodarilo — ostáva surový stream, ktorý sa dá "
-                "prehrať napr. vo VLC alebo prebaliť ručne.")
+    hotove = _do_mp4(ctx, final_raw, dst, hevc, fps)
+    if hotove:
+        vystupy.append(hotove)
+    else:
+        ctx.log("Ani prekódovanie neuspelo — z tohto streamu sa obraz poskladať "
+                "nedá. Bez správnych parametrov ho neprehrá žiadny prehrávač.")
 
     zhrnutie = (f"Vyrezaných {stat['nals']} snímkov. "
                 + (f"Parametre: {najdene['kandidat']['sirka']}×"

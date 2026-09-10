@@ -185,14 +185,14 @@ _FRAME_RE = re.compile(r"frame=\s*(\d+)")
 
 
 def score_headers(toolbox, blob: bytes, sample: bytes, workdir: str,
-                  timeout: int = 180) -> dict:
+                  timeout: int = 180, hevc: bool = False) -> dict:
     """Predradi kandidatske hlavicky vzorke streamu a skusi ju dekodovat.
 
     Rozhoduje nie samotny pocet snimkov, ale ich pomer k poctu chybovych
     hlaseni: pri nespravnom rozliseni dekoder nieco vyprodukuje tiez, ale
     zahlti sa chybami. Kvalita = snimky / (snimky + chyby).
     """
-    test_path = os.path.join(workdir, "_test_hlavicka.h264")
+    test_path = os.path.join(workdir, "_test_hlavicka." + ("h265" if hevc else "h264"))
     with open(test_path, "wb") as f:
         f.write(blob)
         f.write(sample)
@@ -202,7 +202,8 @@ def score_headers(toolbox, blob: bytes, sample: bytes, workdir: str,
     import subprocess
     try:
         r = subprocess.run([ffmpeg, "-hide_banner", "-v", "error", "-stats",
-                            "-f", "h264", "-i", test_path, "-f", "null", "-"],
+                            "-f", "hevc" if hevc else "h264", "-i", test_path,
+                            "-f", "null", "-"],
                            capture_output=True, text=True, timeout=timeout)
         frames = 0
         errors = 0
@@ -231,7 +232,7 @@ def find_best_headers(toolbox, stream_path: str, workdir: str, resolutions=None,
                       sample_bytes: int = 3 << 20, quick: bool = False,
                       log=None, max_tries: int = 2500,
                       good_quality: float = 0.80, good_frames: int = 20,
-                      extra=None) -> dict | None:
+                      extra=None, hevc: bool = False) -> dict | None:
     """Skusa kombinacie parametrov, kym nenajde take, pri ktorych sa video dekoduje.
 
     Ak pouzivatel pozna rozlisenie povodneho videa, staci ho zadat - pocet
@@ -245,7 +246,9 @@ def find_best_headers(toolbox, stream_path: str, workdir: str, resolutions=None,
     # z ineho suboru z rovnakeho zariadenia) - byvaju presne spravne.
     polozky = [{"popis": e["popis"], "blob": e["blob"], "kandidat": e.get("kandidat")}
                for e in (extra or [])]
-    grid = candidate_grid(resolutions, quick=quick)[:max_tries]
+    # Parametre H.265 sa poskladať naslepo nedajú (profile_tier_level má príliš
+    # veľa kombinácií), preto sa pri ňom skúšajú len hotové hlavičky.
+    grid = [] if hevc else candidate_grid(resolutions, quick=quick)[:max_tries]
     polozky += [{"popis": None, "blob": None, "kandidat": c} for c in grid]
     if log:
         log(f"  skúšam až {len(polozky)} možností parametrov H.264 "
@@ -254,7 +257,7 @@ def find_best_headers(toolbox, stream_path: str, workdir: str, resolutions=None,
     for i, item in enumerate(polozky, 1):
         cand = item["kandidat"] or {}
         blob = item["blob"] if item["blob"] is not None else blob_for(cand)
-        res = score_headers(toolbox, blob, sample, workdir)
+        res = score_headers(toolbox, blob, sample, workdir, hevc=hevc)
         if best is None or res["skore"] > best["vysledok"]["skore"]:
             best = {"kandidat": cand, "vysledok": res, "hlavicka": blob}
             if log and res["skore"] > 0:

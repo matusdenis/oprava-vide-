@@ -166,21 +166,39 @@ Nie odhadom, ale meraním — a to dvoma nezávislými spôsobmi:
    „vydláždia“ — súčet ich dĺžok musí presne sedieť s veľkosťou vzorky
    v tabuľke `stsz`. Zašifrované dáta to nesplnia prakticky nikdy. Hranica sa
    nájde polením intervalu a potvrdí sa na niekoľkých nasledujúcich úsekoch.
-2. **Štatisticky (aj bez indexu).** Šifrované dáta sú rovnomerne náhodné, takže
-   nulových bajtov je v nich presne 1/256 (0,39 %). Komprimované video ich má
-   podstatne viac (bežne 0,8 – 3 %). Pri 64 KiB bloku je rozdiel niekoľko
-   desiatok smerodajných odchýlok, takže sa koniec zašifrovanej časti dá určiť
-   spoľahlivo aj vtedy, keď v súbore neprežilo vôbec nič zo štruktúry.
+2. **Štatisticky (aj bez indexu).** Šifrované dáta sú dokonale rovnomerné —
+   každá hodnota bajtu je rovnako pravdepodobná. Chí-kvadrát test rovnomernosti
+   na 256 KiB bloku preto vyjde okolo 255 (± 23) bez ohľadu na veľkosť bloku,
+   kým komprimované video rovnomerné nie je nikdy a jeho odchýlka s veľkosťou
+   bloku rastie:
+
+   | | chí-kvadrát na 256 KiB |
+   |---|---|
+   | zašifrované dáta | 230 – 275 |
+   | video H.265 (najhustejší prípad) | 400 – 1 000 |
+   | video H.264 | 50 000 a viac |
+
+   Koniec zašifrovanej časti sa tak dá určiť spoľahlivo aj vtedy, keď v súbore
+   neprežilo vôbec nič zo štruktúry.
 
 ### Ako sa rekonštruujú stratené parametre obrazu
 
 Keď je zničený index, chýbajú aj SPS/PPS — bez nich dekodér nevie ani to, aké
 je video veľké. Program postupuje od najistejšieho k najmenej istému:
 
-1. parametre nájdené **priamo v tele streamu** (kamery ich často opakujú pri
-   každom kľúčovom snímku — stačí ich skopírovať na začiatok);
-2. parametre z **`avcC` zdravého súboru** z rovnakého zariadenia, ak nejaký je;
-3. **skúšanie kombinácií**: program poskladá SPS/PPS pre mriežku možností
+Kodek pritom nie je vopred známy (bol zapísaný v zničenom indexe), preto sa
+súbor prehľadá pre **H.264 aj H.265** a vyhrá ten, ktorý dá dlhší a súvislejší
+stream. Potom sa postupuje od najistejšieho zdroja parametrov k najmenej istému:
+
+1. parametre nájdené **priamo v tele streamu** — takto ich nesú toky MTS/M2TS
+   a AVCHD, kde sa opakujú pri každom kľúčovom snímku, takže stačí skopírovať
+   ich na začiatok;
+2. parametre z **`avcC`/`hvcC` zdravého súboru** z rovnakého zariadenia. Pri
+   súboroch MP4 je to jediná spoľahlivá cesta pre H.265: kamery aj ffmpeg pri
+   zápise do MP4 parametre z tela streamu odoberú a uložia ich len do hlavičky,
+   takže po jej zašifrovaní v súbore nezostanú. Stačí akékoľvek iné zdravé video
+   z tej istej kamery, hoci len pár sekúnd;
+3. **skúšanie kombinácií** (len H.264): program poskladá SPS/PPS pre mriežku možností
    (rozlíšenie × profil × CABAC/CAVLC × spôsob číslovania snímkov), každú predradí
    vzorke streamu a nechá ffmpeg dekódovať. Vyhráva tá s najlepším pomerom
    dekódovaných snímkov k chybám — pri nesprávnych parametroch sa dekodér zahltí
@@ -214,8 +232,15 @@ naň zapísať nie. Vtedy stačí zvoliť priečinok na internom disku.
 * **Orezanie ide len po kľúčový snímok.** Pri kamerách býva každú 1 – 2 sekundy,
   takže strata je malá. Ak sú kľúčové snímky ďaleko od seba, orezanie zoberie
   viac — plná verzia zostáva k dispozícii tiež.
-* Podporované sú **H.264 a H.265**. Staršie kodeky (MPEG-4 Part 2, MJPEG) sa
-  vyrezať nedajú, ale stratégia s prežitým indexom funguje aj pre ne.
+* Podporované sú **H.264 a H.265**, kodek program rozpozná sám. Pri H.265 bez
+  zdravého vzoru sa parametre poskladať nedajú (majú príliš veľa kombinácií),
+  takže vtedy je vzorový súbor z tej istej kamery nutný. Staršie kodeky
+  (MPEG-4 Part 2, MJPEG) sa vyrezať nedajú, ale stratégia s prežitým indexom
+  funguje aj pre ne.
+* Keď sa vyrezaný stream nedá prebaliť bez straty kvality (chýbajúca pôvodná
+  hlavička to často znemožní), program ho **prekóduje do H.264**, aby výsledok
+  šiel otvoriť v bežnom prehrávači. Je to stratové, ale lepšie než surový
+  súbor, ktorý neotvorí nič.
 * Profily zariadení v databáze sú **orientačné**. Obsah boxu `ftyp` je pre
   prehrateľnosť zameniteľný, takže na výsledok nemajú vplyv — slúžia len na
   lepšie pomenovanie a odporučenie.
