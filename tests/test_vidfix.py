@@ -14,7 +14,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from vidfix import carve, h264_params, mp4                       # noqa: E402
-from vidfix.analyze import analyze                               # noqa: E402
+from vidfix.analyze import (analyze, rychly_verdikt,             # noqa: E402
+                            _je_v_tele_video)
 from vidfix.headerdb import HeaderDB                             # noqa: E402
 from vidfix.repair import Ctx, najdi_videa, spusti, spusti_davku  # noqa: E402
 from vidfix.tools import Toolbox                                 # noqa: E402
@@ -324,6 +325,45 @@ class TestH265(ZakladVzorky):
         mp4y = [o for o in v["vystupy"] if o["cesta"].endswith(".mp4")]
         self.assertTrue(mp4y, "očakával som prehrateľné MP4 na výstupe")
         self.assertGreater(os.path.getsize(mp4y[0]["cesta"]), 65536)
+
+
+@potrebuje_ffmpeg
+class TestVysokyDatovyTok(ZakladVzorky):
+    """Video s vysokým tokom sa od šifrovaných dát štatisticky takmer nelíši.
+
+    Preto nesmie o zachrániteľnosti rozhodovať iba test rovnomernosti — musí
+    existovať aj kontrola, ktorá sa opiera o štruktúru dát.
+    """
+
+    def test_v_tele_videa_sa_najde_obraz(self):
+        f, mm, size = mp4.open_mm(self.zdroj)
+        try:
+            self.assertTrue(_je_v_tele_video(mm, size))
+        finally:
+            mm.close()
+            f.close()
+
+    def test_v_nahodnych_datach_sa_obraz_nenajde(self):
+        nahodny = self.out("nahodne.bin")
+        with open(nahodny, "wb") as f:
+            f.write(os.urandom(6 << 20))
+        f, mm, size = mp4.open_mm(nahodny)
+        try:
+            self.assertFalse(_je_v_tele_video(mm, size))
+        finally:
+            mm.close()
+            f.close()
+
+    def test_zle_meranie_entropie_nezhodi_verdikt(self):
+        # naschvál znefunkčníme test rovnomernosti: všetko bude vyzerať šifrovane
+        povodny = carve.PRAH_CHI2
+        carve.PRAH_CHI2 = 1e9
+        try:
+            v = rychly_verdikt(self.zdroj)
+            self.assertNotEqual(v["verdikt"], "nezachranitelne",
+                                "štruktúrna kontrola mala súbor zachrániť")
+        finally:
+            carve.PRAH_CHI2 = povodny
 
 
 @potrebuje_ffmpeg

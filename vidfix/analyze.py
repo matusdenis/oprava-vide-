@@ -220,6 +220,24 @@ def navrhni_strategie(rep: dict) -> list:
     return out
 
 
+def _je_v_tele_video(mm, size: int, sond: int = 3, okno: int = 3 << 20) -> bool:
+    """Overi, ci sa v tele suboru najde suvisly sled NAL jednotiek.
+
+    Nezavisi na entropii, takze rozhodne aj tam, kde test rovnomernosti zlyhava
+    - teda pri videu s vysokym datovym tokom, ktore vyzera nahodne. Preveruje
+    sa niekolko miest rozlozenych po subore; staci, ked obstoji jedno.
+    """
+    for podiel in (0.25, 0.55, 0.80)[:sond]:
+        zaciatok = int(size * podiel)
+        if zaciatok + 65536 >= size:
+            continue
+        najdene = carve.find_nal_stream(mm, size, hint=zaciatok,
+                                        limit=min(size, zaciatok + okno))
+        if najdene:
+            return True
+    return False
+
+
 def rychly_verdikt(cesta: str, vzoriek: int = 8) -> dict:
     """Rýchlo posúdi jeden súbor: dá sa zachrániť, alebo je zašifrovaný celý?
 
@@ -249,10 +267,19 @@ def rychly_verdikt(cesta: str, vzoriek: int = 8) -> dict:
         sifrovanych = sum(1 for h in hodnoty if h < carve.PRAH_CHI2)
         podiel = sifrovanych / max(1, len(hodnoty))
         vysledok["podiel_sifrovania"] = round(podiel, 3)
-        if podiel > 0.985:
-            return {**vysledok, "verdikt": "nezachranitelne", "postup": None,
-                    "poznamka": "zašifrovaný celý obsah"}
         if podiel > 0.55:
+            # Test rovnomernosti sám o sebe nestačí: video s vysokým dátovým
+            # tokom (napríklad 10-bitové H.265 z profesionálnej kamery) je
+            # kompresiou zhustené natoľko, že sa od šifrovaných dát štatisticky
+            # takmer nelíši. Preto sa ešte pozrieme, či v tele súboru nie je
+            # súvislý sled NAL jednotiek — to už je dôkaz nezávislý od entropie
+            # a rozhodne aj tam, kde by sa štatistika zmýlila.
+            if _je_v_tele_video(mm, size):
+                return {**vysledok, "verdikt": "ciastocne", "postup": "mp4_carve",
+                        "poznamka": "index zničený, ale obraz v tele súboru je"}
+            if podiel > 0.985:
+                return {**vysledok, "verdikt": "nezachranitelne", "postup": None,
+                        "poznamka": "zašifrovaný celý obsah"}
             # Prekladané šifrovanie: medzi zašifrovanými blokmi ostávajú kusy
             # pôvodných dát, ale je ich tak málo a sú tak rozdrobené, že sa
             # z nich súvislé video poskladať nedá.
