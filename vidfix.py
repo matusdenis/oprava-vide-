@@ -22,10 +22,10 @@ from vidfix import __version__                      # noqa: E402
 from vidfix.analyze import (analyze, prehlad_priecinka,      # noqa: E402
                             rozbor)
 from vidfix.headerdb import HeaderDB                # noqa: E402
-from vidfix.repair import (Ctx, STRATEGIE, najdi_videa,      # noqa: E402
-                           spusti, spusti_davku)
+from vidfix.repair import (Ctx, STRATEGIE, najdi_medzikroky,  # noqa: E402
+                           najdi_videa, spusti, spusti_davku)
 from vidfix.tools import Toolbox                    # noqa: E402
-from vidfix.util import najdi_cestu                # noqa: E402
+from vidfix.util import human, najdi_cestu          # noqa: E402
 
 
 def _over_cestu(cesta: str, priecinok: bool = False) -> str | None:
@@ -184,6 +184,35 @@ def prikaz_rozbor(args) -> int:
     return 0
 
 
+def prikaz_uprac(args) -> int:
+    priecinok = _over_cestu(args.priecinok, priecinok=True)
+    if not priecinok:
+        return 2
+    najdene = najdi_medzikroky(priecinok)
+    if not najdene:
+        print("Ziadne medzisubory na zmazanie. Vsetko je uz upratane.")
+        return 0
+    celkom = sum(v for _c, v in najdene)
+    for cesta, velkost in najdene:
+        print(f"  {human(velkost):>10}  {os.path.relpath(cesta, priecinok)}")
+    print(f"\nSpolu {len(najdene)} suborov, {human(celkom)}.")
+    if not args.naozaj:
+        print("\nToto je len vypis — nic sa nezmazalo.")
+        print("Na skutocne zmazanie pridaj na koniec prikazu:  --naozaj")
+        return 0
+    zmazane = 0
+    usetrene = 0
+    for cesta, velkost in najdene:
+        try:
+            os.remove(cesta)
+            zmazane += 1
+            usetrene += velkost
+        except OSError as exc:
+            print(f"  nepodarilo sa zmazat {cesta}: {exc}", file=sys.stderr)
+    print(f"\nZmazanych {zmazane} suborov, uvolnenych {human(usetrene)}.")
+    return 0
+
+
 def prikaz_nastroje(args) -> int:
     tb = Toolbox()
     for meno, info in tb.status().items():
@@ -250,6 +279,11 @@ def main(argv=None) -> int:
     pr = pod.add_parser("rozbor", help="podrobna diagnostika jedneho suboru")
     pr.add_argument("subor")
 
+    pu = pod.add_parser("uprac", help="zmaze medzisubory, ku ktorym uz je hotovy vysledok")
+    pu.add_argument("priecinok")
+    pu.add_argument("--naozaj", action="store_true",
+                    help="skutocne mazat (bez toho sa len vypise, co by sa zmazalo)")
+
     pod.add_parser("nastroje", help="zobrazí nájdené nástroje a stav databázy")
 
     args = p.parse_args(argv)
@@ -263,6 +297,8 @@ def main(argv=None) -> int:
         return prikaz_prehlad(args)
     if args.prikaz == "rozbor":
         return prikaz_rozbor(args)
+    if args.prikaz == "uprac":
+        return prikaz_uprac(args)
     if args.prikaz == "nastroje":
         return prikaz_nastroje(args)
     from vidfix.server import spusti_server

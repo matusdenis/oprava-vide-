@@ -29,9 +29,9 @@ const FPS_PREDVOLBY = [24, 25, 30, 50, 60, 120];
    používateľ nevypĺňal niečo, čo na výsledok nemá vplyv. */
 const VOLBY_STRATEGIE = {
   mp4_graft: ["orezanie"],
-  mp4_carve: ["rozlisenie", "fps", "vzor", "hladanie"],
+  mp4_carve: ["rozlisenie", "fps", "vzor", "hladanie", "medzisubory"],
   untrunc: ["rozlisenie", "fps", "vzor"],
-  ts_resync: [],
+  ts_resync: ["medzisubory"],
   ffmpeg_remux: [],
 };
 
@@ -664,6 +664,7 @@ function zozbierajVolby() {
     fps: +document.getElementById("volbaFps").value || 30,
     vzor: document.getElementById("volbaVzor").value || null,
     verzie: stavAplikacie.verzie || "obidve",
+    ponechat_medzisubory: (document.getElementById("volbaMedzisubory") || {}).checked || false,
     rychle_hladanie: document.getElementById("volbaRychle").checked,
   };
 }

@@ -385,6 +385,21 @@ def strategia_ts_resync(ctx: Ctx) -> dict:
         if not any(v["cesta"].endswith(".mp4") for v in vystupy):
             ctx.log("Prebalenie do MP4 sa nepodarilo. Výsledný .ts súbor sa dá prehrať "
                     "napríklad vo VLC, ktorý si začiatok toku nájde sám.")
+        elif not ctx.options.get("ponechat_medzisubory"):
+            # MP4 je hotové, medzikroky (.ts, .h264) sú zbytočné a zaberajú
+            # toľko miesta ako samotné video
+            zostava = []
+            for v in vystupy:
+                if v["cesta"].endswith(".mp4"):
+                    zostava.append(v)
+                    continue
+                try:
+                    os.remove(v["cesta"])
+                except OSError:
+                    zostava.append(v)
+            if len(zostava) != len(vystupy):
+                ctx.log("Medzisúbory zmazané (v nastaveniach sa dajú ponechať).")
+            vystupy = zostava
     return {"ok": True, "vystupy": vystupy,
             "zhrnutie": f"Zahodených prvých {human(sync['offset'])}, zvyšok zachránený.",
             "kontrola": ctx.toolbox.playable(vystupy[-1]["cesta"], seconds=8)}
@@ -481,23 +496,40 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
     else:
         parametre_ok = bool(params)
 
+    # Hlavičku pripíšeme na začiatok toho istého súboru namiesto vyrobenia
+    # druhej kópie — pri veľkých videách to je rozdiel celej veľkosti súboru.
     final_raw = raw
     if hlavicka:
-        final_raw = ctx.out("vyrezany_s_hlavickou", ".h265" if hevc else ".h264")
-        with open(final_raw, "wb") as fo:
+        docasny = raw + ".tmp"
+        with open(docasny, "wb") as fo:
             fo.write(hlavicka)
             with open(raw, "rb") as fi:
                 shutil.copyfileobj(fi, fo, COPY_CHUNK)
-    vystupy.append({"cesta": final_raw, "popis": "Surový obrazový stream"})
+        os.replace(docasny, raw)
 
     fps = ctx.options.get("fps") or 30
     dst = ctx.out("zachraneny", ".mp4")
     hotove = _do_mp4(ctx, final_raw, dst, hevc, fps)
     if hotove:
         vystupy.append(hotove)
+        # Surový stream je len medzikrok. Keď MP4 vzniklo, je zbytočný a zaberá
+        # rovnako veľa miesta ako samotné video, preto ho zmažeme — ak si ho
+        # používateľ výslovne nepraje ponechať.
+        if ctx.options.get("ponechat_medzisubory"):
+            vystupy.insert(0, {"cesta": final_raw,
+                               "popis": "Surový obrazový stream (medzikrok)"})
+        else:
+            try:
+                os.remove(final_raw)
+                ctx.log("Medzisúbor so surovým streamom zmazaný "
+                        "(v nastaveniach sa dá ponechať).")
+            except OSError:
+                pass
     else:
         ctx.log("Ani prekódovanie neuspelo — z tohto streamu sa obraz poskladať "
                 "nedá. Bez správnych parametrov ho neprehrá žiadny prehrávač.")
+        vystupy.append({"cesta": final_raw,
+                        "popis": "Surový obrazový stream (MP4 sa vyrobiť nepodarilo)"})
 
     zhrnutie = (f"Vyrezaných {stat['nals']} snímkov. "
                 + (f"Parametre: {najdene['kandidat']['sirka']}×"
@@ -694,3 +726,42 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
     return {"ok": hotove > 0, "pocet": len(subory), "hotove": hotove,
             "zlyhane": zlyhane, "vysledky": vysledky,
             "zhrnutie": f"Opravených {hotove} z {len(subory)} súborov."}
+
+
+# ---------------------------------------------------------------------------
+# Upratanie medzisuborov
+# ---------------------------------------------------------------------------
+
+# Pripony a znacky, ktorymi program pomenuva medzikroky. Nic ine sa nemaze.
+MEDZIKROKY = ("_vyrezany.h264", "_vyrezany.h265",
+              "_vyrezany_s_hlavickou.h264", "_vyrezany_s_hlavickou.h265",
+              "_obraz.h264", "_obraz.h265",
+              "_zachraneny.ts", "_zachraneny_od_klucoveho_snimku.ts")
+
+
+def najdi_medzikroky(priecinok: str, rekurzivne: bool = True) -> list:
+    """Najde medzisubory, ku ktorym uz existuje hotovy vysledok.
+
+    Maze sa len to, co program sam vyrobil ako medzikrok, a len vtedy, ked
+    vedla lezi hotove MP4 - teda ked uz medzikrok netreba. Vsetko ostatne
+    ostava nedotknute.
+    """
+    out = []
+    chodza = os.walk(priecinok) if rekurzivne else [
+        (priecinok, [], [e.name for e in os.scandir(priecinok) if e.is_file()])]
+    for koren, _podpriecinky, subory in chodza:
+        mena = set(subory)
+        for nazov in subory:
+            for znacka in MEDZIKROKY:
+                if not nazov.endswith(znacka):
+                    continue
+                zaklad = nazov[:-len(znacka)]
+                hotove = f"{zaklad}_zachraneny.mp4"
+                if hotove in mena:
+                    cesta = os.path.join(koren, nazov)
+                    try:
+                        out.append((cesta, os.path.getsize(cesta)))
+                    except OSError:
+                        pass
+                break
+    return out

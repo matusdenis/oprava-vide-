@@ -17,7 +17,8 @@ from vidfix import carve, h264_params, mp4                       # noqa: E402
 from vidfix.analyze import (analyze, rychly_verdikt,             # noqa: E402
                             _je_v_tele_video)
 from vidfix.headerdb import HeaderDB                             # noqa: E402
-from vidfix.repair import Ctx, najdi_videa, spusti, spusti_davku  # noqa: E402
+from vidfix.repair import (Ctx, najdi_medzikroky, najdi_videa,   # noqa: E402
+                           spusti, spusti_davku)
 from vidfix.tools import Toolbox                                 # noqa: E402
 from vidfix.util import entropy, human                           # noqa: E402
 from vzorky import posifruj_skakavo, posifruj_zaciatok, vyrob_video  # noqa: E402
@@ -204,6 +205,42 @@ class TestIndexZniceny(ZakladVzorky):
             f.close()
         self.assertIsNotNone(est["koniec"])
         self.assertLessEqual(abs(est["koniec"] - 512 * 1024), 128 * 1024)
+
+    def test_medzisubory_sa_nenechavaju(self):
+        # surový stream zaberá toľko ako samotné video — po vyrobení MP4 je zbytočný
+        vystup = self.out("bez_medzikrokov")
+        ctx = Ctx(self.poskodeny, vystup, TB, HeaderDB(),
+                  {"sirka": 640, "vyska": 360, "fps": 25})
+        spusti("mp4_carve", ctx)
+        zvysne = os.listdir(vystup)
+        self.assertTrue(any(f.endswith(".mp4") for f in zvysne))
+        self.assertFalse([f for f in zvysne if f.endswith((".h264", ".h265"))],
+                         f"medzisúbory mali byť zmazané, ostalo: {zvysne}")
+
+    def test_medzisubory_sa_daju_ponechat(self):
+        vystup = self.out("s_medzikrokmi")
+        ctx = Ctx(self.poskodeny, vystup, TB, HeaderDB(),
+                  {"sirka": 640, "vyska": 360, "fps": 25,
+                   "ponechat_medzisubory": True})
+        spusti("mp4_carve", ctx)
+        zvysne = os.listdir(vystup)
+        self.assertTrue([f for f in zvysne if f.endswith((".h264", ".h265"))])
+
+    def test_uprac_maze_len_medzikroky_s_hotovym_vysledkom(self):
+        d = self.out("upratovanie")
+        os.makedirs(d, exist_ok=True)
+        hotovy = os.path.join(d, "A_zachraneny.mp4")
+        medzikrok = os.path.join(d, "A_vyrezany.h264")
+        osirely = os.path.join(d, "B_vyrezany.h264")   # bez hotového výsledku
+        dolezity = os.path.join(d, "moje_video.mp4")
+        for c in (hotovy, medzikrok, osirely, dolezity):
+            with open(c, "wb") as f:
+                f.write(b"x" * 2048)
+        najdene = [c for c, _v in najdi_medzikroky(d)]
+        self.assertIn(medzikrok, najdene)
+        self.assertNotIn(osirely, najdene, "medzikrok bez výsledku sa mazať nesmie")
+        self.assertNotIn(dolezity, najdene)
+        self.assertNotIn(hotovy, najdene)
 
     def test_vyrezanie_zachrani_obraz(self):
         ctx = Ctx(self.poskodeny, self.out("vysledok_carve"), TB, HeaderDB(),

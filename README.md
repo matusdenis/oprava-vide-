@@ -281,6 +281,26 @@ naň zapísať nie. Vtedy stačí zvoliť priečinok na internom disku.
 * **Ak máš z kamery len jediné video a to má zničený index**, pri H.265 sa
   parametre vziať odkiaľ nedá. Oplatí sa prehľadať zálohy, telefón, staré karty
   aj kôš — postačí akýkoľvek iný záznam z tej istej kamery, hoci zašifrovaný.
+### Koľko miesta to zaberie
+
+Program zapisuje výsledky vedľa pôvodných súborov, ktoré nikdy nemení — treba
+teda počítať s voľným miestom. Aby ho nezaberal zbytočne:
+
+* **surové streamy sú len medzikrok** a po vyrobení MP4 sa mažú (v nastaveniach
+  sa dajú ponechať). Predtým po každom vyrezaní ostávali na disku tri kópie
+  toho istého videa;
+* pri stratégii „Nahradenie hlavičky“ sa dá voľbou `--verzie` nechať len jedna
+  z dvoch verzií;
+* už nazbierané medzisúbory z predošlých behov upraceš príkazom:
+
+```bash
+python3 vidfix.py uprac ~/opravene            # vypíše, čo by sa zmazalo
+python3 vidfix.py uprac ~/opravene --naozaj   # skutočne zmaže
+```
+
+Maže sa len to, čo program sám vyrobil ako medzikrok, a len keď vedľa leží
+hotový výsledok. Všetko ostatné ostáva nedotknuté.
+
 ### Ktoré verzie výsledku vznikajú
 
 Stratégia „Nahradenie hlavičky“ vyrobí predvolene dva súbory:
