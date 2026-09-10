@@ -134,13 +134,20 @@ def strategia_mp4_graft(ctx: Ctx) -> dict:
         vystupy.append({"cesta": dst, "popis": "Opravený súbor v plnej dĺžke "
                                                "(začiatok môže byť rušivý)"})
 
-        # kontrola vysledku
-        stav = ctx.toolbox.probe(dst)
-        if stav.get("_ok"):
-            ctx.log("ffprobe/ffmpeg súbor úspešne prečítal.")
+        # Samotná oprava je hotová aj bez ffmpeg — ten slúži už len na overenie
+        # a na voliteľné orezanie. Keď chýba, výsledok sa aj tak odovzdá.
+        ma_ffmpeg = bool(ctx.toolbox.path("ffmpeg"))
+        if not ma_ffmpeg:
+            ctx.log("ffmpeg nie je k dispozícii — opravený súbor je hotový, ale "
+                    "neviem ho overiť ani vyrobiť orezanú verziu. Skús ho prehrať "
+                    "napríklad vo VLC, alebo doinštaluj ffmpeg podľa záložky Nástroje.")
+        else:
+            stav = ctx.toolbox.probe(dst)
+            if stav.get("_ok"):
+                ctx.log("ffprobe/ffmpeg súbor úspešne prečítal.")
 
         # orezanie poskodeneho zaciatku po prvy klucovy snimok
-        if ctx.options.get("orezat", True) and video is not None and damage_end:
+        if ma_ffmpeg and ctx.options.get("orezat", True) and video is not None and damage_end:
             idx, cas = video.first_intact_keyframe(damage_end)
             if cas is not None:
                 ctx.log(f"Prvý neporušený kľúčový snímok je v čase {cas:.3f} s "
@@ -161,7 +168,8 @@ def strategia_mp4_graft(ctx: Ctx) -> dict:
             else:
                 ctx.log("Nenašiel sa kľúčový snímok za poškodenou časťou.")
 
-        kontrola = ctx.toolbox.playable(vystupy[-1]["cesta"], seconds=8)
+        kontrola = (ctx.toolbox.playable(vystupy[-1]["cesta"], seconds=8) if ma_ffmpeg
+                    else {"ok": None, "reason": "bez ffmpeg sa výsledok nedá overiť"})
         return {"ok": True, "vystupy": vystupy,
                 "zhrnutie": ("Index moov prežil, hlavička bola nahradená. "
                              f"Nenávratne zničený je len začiatok ({human(damage_end)})."),
@@ -436,6 +444,10 @@ def strategia_ffmpeg_remux(ctx: Ctx) -> dict:
             "kontrola": ctx.toolbox.playable(dst, seconds=8)}
 
 
+# Stratégie, ktoré sa bez ffmpeg nedajú dokončiť. Kontrolujú sa vopred, aby
+# používateľ nečakal minúty na prácu, ktorá aj tak nemôže skončiť výsledkom.
+VYZADUJU_FFMPEG = {"mp4_carve", "ts_resync", "untrunc", "ffmpeg_remux"}
+
 STRATEGIE = {
     "mp4_graft": strategia_mp4_graft,
     "mp4_carve": strategia_mp4_carve,
@@ -449,4 +461,9 @@ def spusti(strategy_id: str, ctx: Ctx) -> dict:
     fn = STRATEGIE.get(strategy_id)
     if fn is None:
         raise ValueError(f"Neznáma stratégia: {strategy_id}")
+    if strategy_id in VYZADUJU_FFMPEG and not ctx.toolbox.path("ffmpeg"):
+        raise RuntimeError(
+            "Tento postup potrebuje ffmpeg, ktorý sa v počítači nenašiel. "
+            "Nainštaluj ho (v záložke Nástroje je návod), alebo použi postup "
+            "„Nahradenie hlavičky“, ktorý ffmpeg nepotrebuje.")
     return fn(ctx)

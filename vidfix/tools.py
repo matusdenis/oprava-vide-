@@ -1,10 +1,11 @@
 """Vyhladanie a spustanie externych nastrojov: ffmpeg, ffprobe, untrunc."""
 from __future__ import annotations
 
+import glob
 import json
 import os
-import re
 import platform
+import re
 import shutil
 import subprocess
 
@@ -34,13 +35,38 @@ def _candidates(name: str):
         p = os.path.join(d, exe)
         if os.path.isfile(p):
             yield p
-    # ffmpeg z balicka imageio-ffmpeg, ak je nainstalovany
     if name == "ffmpeg":
-        try:
-            import imageio_ffmpeg
-            yield imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            pass
+        yield from _imageio_kandidati()
+
+
+# Kde balicek imageio-ffmpeg necháva stiahnuty binarny subor. Hlada sa aj mimo
+# beziaceho Pythonu: na jednom pocitaci byva Pythonov viac (systemovy, z
+# python.org, z Homebrew) a balicek moze byt nainstalovany pod inym z nich,
+# nez pod ktorym prave bezi tento program.
+IMAGEIO_VZORY = [
+    "~/Library/Python/*/lib/python/site-packages/imageio_ffmpeg/binaries/ffmpeg-*",
+    "~/.local/lib/python*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*",
+    "~/AppData/Roaming/Python/Python*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*",
+    "/Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages/"
+    "imageio_ffmpeg/binaries/ffmpeg-*",
+    "/usr/local/lib/python*/*-packages/imageio_ffmpeg/binaries/ffmpeg-*",
+    "/usr/lib/python3/*-packages/imageio_ffmpeg/binaries/ffmpeg-*",
+    "/opt/homebrew/lib/python*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*",
+]
+
+
+def _imageio_kandidati():
+    """Najde ffmpeg z balicka imageio-ffmpeg, aj ked patri inemu Pythonu."""
+    try:
+        import imageio_ffmpeg
+        yield imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+    for vzor in IMAGEIO_VZORY:
+        # zoradene odzadu, aby vyhrala novsia verzia Pythonu aj ffmpeg
+        for p in sorted(glob.glob(os.path.expanduser(vzor)), reverse=True):
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                yield p
 
 
 class Toolbox:

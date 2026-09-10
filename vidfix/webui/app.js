@@ -1,7 +1,12 @@
 "use strict";
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
 let stavAplikacie = { subor: null, analyza: null, strategia: null, uloha: null,
-                      domov: "", vystup: "", priecinokVidea: "" };
+                      domov: "", vystup: "", priecinokVidea: "",
+                      maFfmpeg: true, vystupOk: true };
+
+/* Postupy, ktoré sa bez ffmpeg nedajú dokončiť. „Nahradenie hlavičky“ medzi ne
+   nepatrí — to je čisté prepísanie hlavičky, ktoré ffmpeg nepotrebuje. */
+const VYZADUJU_FFMPEG = ["mp4_carve", "ts_resync", "untrunc", "ffmpeg_remux"];
 
 /* Prednastavené rozlíšenia — najčastejšie zdroje domáceho aj dronového videa.
    Slúžia na rekonštrukciu parametrov, keď index videa neprežil. */
@@ -288,7 +293,8 @@ function pripravOpravu(a) {
       <div class="volba" data-volba="hladanie"><label><input type="checkbox" id="volbaRychle" checked>
         Rýchle hľadanie parametrov (menej kombinácií)</label></div>
     </div>
-    <button id="btnSpustit">Spustiť opravu</button></div>
+    <button id="btnSpustit">Spustiť opravu</button>
+    <p class="popis" id="poznamkaSpustit" style="margin:8px 0 0"></p></div>
     <div id="priebehOpravy"></div>`;
   el.innerHTML = html;
 
@@ -348,6 +354,27 @@ function zobrazVolby() {
   });
   const karta = document.querySelector("[data-volba]")?.closest(".karta");
   if (karta) karta.hidden = pouzite.length === 0;
+  aktualizujSpustit();
+}
+
+/* Tlačidlo Spustiť opravu je aktívne, len keď sa dá kam zapisovať a keď je
+   k dispozícii všetko, čo zvolený postup potrebuje. */
+function aktualizujSpustit() {
+  const btn = document.getElementById("btnSpustit");
+  const poznamka = document.getElementById("poznamkaSpustit");
+  if (!btn) return;
+  const chybaFfmpeg = !stavAplikacie.maFfmpeg
+    && VYZADUJU_FFMPEG.includes(stavAplikacie.strategia);
+  btn.disabled = chybaFfmpeg || !stavAplikacie.vystupOk;
+  if (poznamka) {
+    poznamka.innerHTML = chybaFfmpeg
+      ? `<span class="znacka zla">chýba ffmpeg</span> Tento postup ho potrebuje.
+         Nainštaluj ho podľa záložky <b>Nástroje</b>, alebo zvoľ postup
+         „Nahradenie hlavičky“, ktorý ffmpeg nepotrebuje.`
+      : (!stavAplikacie.maFfmpeg
+         ? `<span class="znacka pozor">ffmpeg chýba</span> Oprava prebehne,
+            ale výsledok sa nedá overiť ani orezať.` : "");
+  }
 }
 
 /* Overí, či sa do zvoleného priečinka dá zapisovať. Externé disky (NTFS) býva
@@ -358,18 +385,14 @@ async function overVystup() {
   const stav = document.getElementById("stavVystupu");
   if (!pole || !stav) return;
   stavAplikacie.vystup = pole.value;
-  const btn = document.getElementById("btnSpustit");
   try {
     const v = await api("/api/kontrola-vystupu", { cesta: pole.value });
-    if (v.zapisovatelny) {
-      stav.innerHTML = `<span class="znacka dobra">priečinok je v poriadku</span> `
-        + esc(v.popis || "");
-      if (btn) btn.disabled = false;
-    } else {
-      stav.innerHTML = `<span class="znacka zla">nedá sa doň zapisovať</span> `
-        + esc(v.popis || "") + ` — vyber iné miesto tlačidlom vyššie.`;
-      if (btn) btn.disabled = true;
-    }
+    stavAplikacie.vystupOk = !!v.zapisovatelny;
+    stav.innerHTML = v.zapisovatelny
+      ? `<span class="znacka dobra">priečinok je v poriadku</span> ` + esc(v.popis || "")
+      : `<span class="znacka zla">nedá sa doň zapisovať</span> ` + esc(v.popis || "")
+        + ` — vyber iné miesto tlačidlom vyššie.`;
+    aktualizujSpustit();
   } catch (e) { stav.textContent = e.message; }
 }
 
@@ -421,9 +444,11 @@ function vykresliVysledok(s, priebeh, log) {
   const k = v.kontrola || {};
   let html = `<div class="vysledok ${v.ok ? "" : "zly"}">
     <b>${esc(v.zhrnutie || "")}</b><br>
-    Kontrola prehrateľnosti: ${k.ok
+    Kontrola prehrateľnosti: ${k.ok === true
       ? '<span class="znacka dobra">výsledok sa prehráva bez chýb</span>'
-      : `<span class="znacka pozor">dekodér hlási ${k.error_count ?? "?"} chýb</span>`}</div>`;
+      : (k.ok === null
+         ? '<span class="znacka pozor">nedala sa spraviť — chýba ffmpeg</span>'
+         : `<span class="znacka pozor">dekodér hlási ${k.error_count ?? "?"} chýb</span>`)}</div>`;
   html += `<div class="karta"><h3 style="margin-top:0">Výsledné súbory</h3>`;
   for (const s2 of (v.vystupy || [])) {
     html += `<div class="subor-vystup"><span>🎬</span><div>
@@ -515,6 +540,8 @@ document.getElementById("btnPridatHlavicku").onclick = async () => {
 async function nacitajNastroje() {
   const s = await api("/api/stav");
   const n = s.nastroje;
+  stavAplikacie.maFfmpeg = !!(n.ffmpeg && n.ffmpeg.available);
+  aktualizujSpustit();
   const povinne = { ffmpeg: true, ffprobe: false, untrunc: false };
   document.getElementById("stavNastroje").innerHTML =
     Object.entries(n).map(([k, v]) => {
