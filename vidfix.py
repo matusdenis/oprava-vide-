@@ -25,9 +25,49 @@ from vidfix.headerdb import HeaderDB                # noqa: E402
 from vidfix.repair import (Ctx, STRATEGIE, najdi_videa,      # noqa: E402
                            spusti, spusti_davku)
 from vidfix.tools import Toolbox                    # noqa: E402
+from vidfix.util import najdi_cestu                # noqa: E402
+
+
+def _over_cestu(cesta: str, priecinok: bool = False) -> str | None:
+    """Overi cestu a pri chybe poradi, namiesto vypisania chyboveho zasobnika."""
+    najdena = najdi_cestu(cesta)
+    if najdena and (os.path.isdir(najdena) if priecinok else os.path.isfile(najdena)):
+        if os.path.abspath(najdena) != os.path.abspath(cesta):
+            print(f"(cesta nájdená v inom zápise diakritiky: {najdena})")
+        return najdena
+    co = "Priecinok" if priecinok else "Subor"
+    print(f"{co} sa nenasiel:\n  {cesta}\n", file=sys.stderr)
+    rodic = najdi_cestu(os.path.dirname(cesta.rstrip(os.sep))) if os.sep in cesta else None
+    if rodic and os.path.isdir(rodic):
+        try:
+            polozky = sorted(os.listdir(rodic))[:15]
+            print(f"V priecinku {rodic} je:", file=sys.stderr)
+            for p in polozky:
+                print(f"  {p}", file=sys.stderr)
+            if len(polozky) == 15:
+                print("  …", file=sys.stderr)
+        except OSError:
+            pass
+    else:
+        print("Nedostupny je uz aj nadradeny priecinok — je disk pripojeny?",
+              file=sys.stderr)
+        print("Pripojene disky:", file=sys.stderr)
+        try:
+            for d in sorted(os.listdir("/Volumes")):
+                print(f"  /Volumes/{d}", file=sys.stderr)
+        except OSError:
+            pass
+    print("\nTIP: napis prikaz aj s medzerou na konci a potom pretiahni subor "
+          "z Findera\n     priamo do okna terminalu — cesta sa vlozi presne.",
+          file=sys.stderr)
+    return None
 
 
 def prikaz_analyza(args) -> int:
+    subor = _over_cestu(args.subor)
+    if not subor:
+        return 2
+    args.subor = subor
     db, tb = HeaderDB(), Toolbox()
     rep = analyze(args.subor, db, tb, log=lambda m: print(m, file=sys.stderr))
     if args.json:
@@ -52,6 +92,10 @@ def prikaz_analyza(args) -> int:
 
 
 def prikaz_oprav(args) -> int:
+    subor = _over_cestu(args.subor)
+    if not subor:
+        return 2
+    args.subor = subor
     db, tb = HeaderDB(), Toolbox()
     strategia = args.strategia
     if not strategia:
@@ -82,12 +126,12 @@ def prikaz_oprav(args) -> int:
 
 
 def prikaz_davka(args) -> int:
-    db, tb = HeaderDB(), Toolbox()
-    if os.path.isdir(args.priecinok):
-        subory = najdi_videa(args.priecinok)
-    else:
-        print(f"Priecinok neexistuje: {args.priecinok}", file=sys.stderr)
+    priecinok = _over_cestu(args.priecinok, priecinok=True)
+    if not priecinok:
         return 2
+    args.priecinok = priecinok
+    db, tb = HeaderDB(), Toolbox()
+    subory = najdi_videa(priecinok)
     if not subory:
         print("V priecinku sa nenasli ziadne videa.", file=sys.stderr)
         return 2
@@ -107,10 +151,10 @@ def prikaz_davka(args) -> int:
 
 
 def prikaz_prehlad(args) -> int:
-    if not os.path.isdir(args.priecinok):
-        print(f"Priecinok neexistuje: {args.priecinok}", file=sys.stderr)
+    priecinok = _over_cestu(args.priecinok, priecinok=True)
+    if not priecinok:
         return 2
-    subory = najdi_videa(args.priecinok)
+    subory = najdi_videa(priecinok)
     if not subory:
         print("V priecinku sa nenasli ziadne videa.", file=sys.stderr)
         return 2
@@ -131,7 +175,10 @@ def prikaz_prehlad(args) -> int:
 
 
 def prikaz_rozbor(args) -> int:
-    rozbor(args.subor, HeaderDB(), Toolbox(), log=lambda m: print(m, flush=True))
+    subor = _over_cestu(args.subor)
+    if not subor:
+        return 2
+    rozbor(subor, HeaderDB(), Toolbox(), log=lambda m: print(m, flush=True))
     return 0
 
 

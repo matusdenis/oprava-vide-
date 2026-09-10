@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import os
+import unicodedata
 from collections import Counter
 
 
@@ -93,3 +94,46 @@ def safe_name(name: str) -> str:
     bad = '<>:"/\\|?*\0'
     out = "".join("_" if c in bad else c for c in name)
     return out.strip() or "vystup"
+
+
+def najdi_cestu(cesta: str) -> str | None:
+    """Nájde súbor alebo priečinok aj pri odlišnom zápise diakritiky.
+
+    macOS ukladá názvy súborov v rozloženom tvare (NFD: "s" + háčik), kým
+    z klávesnice a zo schránky prichádza zložený tvar (NFC: "š"). Na APFS to
+    systém zrovnáva sám, ale na externých diskoch s exFAT alebo NTFS nie —
+    a potom sa cesta so slovom ako "škola" nenájde, hoci vyzerá presne rovnako.
+    Preto skúsime oba tvary, a nakoniec aj porovnanie po jednotlivých úrovniach.
+    """
+    if not cesta:
+        return None
+    cesta = os.path.expanduser(cesta)
+    if os.path.exists(cesta):
+        return cesta
+    for forma in ("NFC", "NFD"):
+        skus = unicodedata.normalize(forma, cesta)
+        if os.path.exists(skus):
+            return skus
+
+    # Cestu prejdeme po častiach a na každej úrovni hľadáme názov, ktorý sa
+    # zhoduje po zjednotení diakritiky.
+    casti = [c for c in cesta.split(os.sep) if c]
+    aktualna = os.sep if cesta.startswith(os.sep) else "."
+    for cast in casti:
+        if os.path.exists(os.path.join(aktualna, cast)):
+            aktualna = os.path.join(aktualna, cast)
+            continue
+        hladane = unicodedata.normalize("NFC", cast).lower()
+        najdene = None
+        try:
+            with os.scandir(aktualna) as it:
+                for e in it:
+                    if unicodedata.normalize("NFC", e.name).lower() == hladane:
+                        najdene = e.name
+                        break
+        except OSError:
+            return None
+        if najdene is None:
+            return None
+        aktualna = os.path.join(aktualna, najdene)
+    return aktualna if os.path.exists(aktualna) else None
