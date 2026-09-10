@@ -19,7 +19,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from vidfix import __version__                      # noqa: E402
-from vidfix.analyze import analyze                  # noqa: E402
+from vidfix.analyze import (analyze, prehlad_priecinka,      # noqa: E402
+                            rozbor)
 from vidfix.headerdb import HeaderDB                # noqa: E402
 from vidfix.repair import (Ctx, STRATEGIE, najdi_videa,      # noqa: E402
                            spusti, spusti_davku)
@@ -105,6 +106,35 @@ def prikaz_davka(args) -> int:
     return 0 if v["ok"] else 1
 
 
+def prikaz_prehlad(args) -> int:
+    if not os.path.isdir(args.priecinok):
+        print(f"Priecinok neexistuje: {args.priecinok}", file=sys.stderr)
+        return 2
+    subory = najdi_videa(args.priecinok)
+    if not subory:
+        print("V priecinku sa nenasli ziadne videa.", file=sys.stderr)
+        return 2
+    print(f"Preveruje sa {len(subory)} suborov…")
+    v = prehlad_priecinka(subory, log=lambda m: print(m, flush=True))
+    znaky = {"dobre": "OK   ", "ciastocne": "CAST ", "nezachranitelne": "NIE  ",
+             "chyba": "?    "}
+    print()
+    for p in v["polozky"]:
+        print(f"  {znaky.get(p.get('verdikt'), '?    ')} "
+              f"{p['subor'][:44]:46s} {p.get('velkost_citatelne', ''):>10s}  "
+              f"{p.get('poznamka', '')}")
+    print()
+    print(f"Zachranitelnych uplne:   {v['pocty'].get('dobre', 0)}")
+    print(f"Zachranitelnych ciastocne: {v['pocty'].get('ciastocne', 0)}")
+    print(f"Nezachranitelnych:       {v['pocty'].get('nezachranitelne', 0)}")
+    return 0
+
+
+def prikaz_rozbor(args) -> int:
+    rozbor(args.subor, HeaderDB(), Toolbox(), log=lambda m: print(m, flush=True))
+    return 0
+
+
 def prikaz_nastroje(args) -> int:
     tb = Toolbox()
     for meno, info in tb.status().items():
@@ -158,6 +188,12 @@ def main(argv=None) -> int:
     pd.add_argument("--bez-orezania", action="store_true")
     pd.add_argument("--dokladne", action="store_true")
 
+    pp = pod.add_parser("prehlad", help="pretriedi priecinok na zachranitelne a nie")
+    pp.add_argument("priecinok")
+
+    pr = pod.add_parser("rozbor", help="podrobna diagnostika jedneho suboru")
+    pr.add_argument("subor")
+
     pod.add_parser("nastroje", help="zobrazí nájdené nástroje a stav databázy")
 
     args = p.parse_args(argv)
@@ -167,6 +203,10 @@ def main(argv=None) -> int:
         return prikaz_oprav(args)
     if args.prikaz == "davka":
         return prikaz_davka(args)
+    if args.prikaz == "prehlad":
+        return prikaz_prehlad(args)
+    if args.prikaz == "rozbor":
+        return prikaz_rozbor(args)
     if args.prikaz == "nastroje":
         return prikaz_nastroje(args)
     from vidfix.server import spusti_server

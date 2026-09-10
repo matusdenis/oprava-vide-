@@ -16,7 +16,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
-from .analyze import analyze
+from .analyze import analyze, prehlad_priecinka
 from .headerdb import HeaderDB
 from .jobs import JobManager
 from .repair import Ctx, najdi_videa, spusti as spusti_strategiu, spusti_davku
@@ -269,6 +269,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._oprava(telo)
             elif cesta == "/api/davka":
                 self._davka(telo)
+            elif cesta == "/api/prehlad":
+                priecinok = telo.get("priecinok", "")
+                if not os.path.isdir(priecinok):
+                    self._json({"chyba": "Priečinok neexistuje."}, 400)
+                else:
+                    subory = najdi_videa(priecinok)
+                    st = self.stav
+                    job = st.jobs.spusti(
+                        f"Prehľad: {len(subory)} súborov",
+                        lambda log: prehlad_priecinka(subory, log=log))
+                    self._json({"uloha": job.id, "pocet": len(subory)})
             elif cesta == "/api/uloha/zrusit":
                 job = self.stav.jobs.get(telo.get("id", ""))
                 if not job:

@@ -122,6 +122,108 @@ function vyberSubor(cesta) {
 }
 document.getElementById("btnPrejst").onclick = () =>
   prejst(document.getElementById("cestaVstup").value);
+
+/* ---------- prehľad celého priečinka ----------
+   Pri stovkách zašifrovaných videí nemá zmysel skúšať jedno po druhom.
+   Rýchly test povie, ktoré sú zachrániteľné a ktoré zašifroval ransomvér celé. */
+document.getElementById("btnPrehlad").onclick = async () => {
+  const priecinok = document.getElementById("cestaVstup").value;
+  const el = document.getElementById("prehladObsah");
+  el.innerHTML = `<div class="karta"><span class="spinner"></span>
+    Preverujem súbory v priečinku…</div>`;
+  try {
+    const { uloha, pocet } = await api("/api/prehlad", { priecinok });
+    el.innerHTML = `<div class="karta" id="kartaPrehladu">
+      <h3 style="margin-top:0"><span class="spinner"></span>
+        Preverujem ${pocet} súborov…</h3>
+      <p class="popis" id="prehladPriebeh"></p></div>`;
+    sledujUlohu(uloha, riadky => {
+      const p = document.getElementById("prehladPriebeh");
+      if (p && riadky.length) p.textContent = riadky[riadky.length - 1].text;
+    }, s => vykresliPrehlad(s, priecinok));
+  } catch (e) {
+    el.innerHTML = `<div class="vysledok zly">${esc(e.message)}</div>`;
+  }
+};
+
+const VERDIKTY = {
+  dobre: { znacka: "dobra", text: "zachrániteľné" },
+  ciastocne: { znacka: "pozor", text: "čiastočne" },
+  nezachranitelne: { znacka: "zla", text: "zašifrované celé" },
+  chyba: { znacka: "pozor", text: "nedá sa prečítať" },
+};
+
+function vykresliPrehlad(s, priecinok) {
+  const el = document.getElementById("prehladObsah");
+  if (s.stav === "chyba") {
+    el.innerHTML = `<div class="vysledok zly">${esc(s.chyba)}</div>`;
+    return;
+  }
+  const v = s.vysledok || {};
+  const p = v.pocty || {};
+  const zachranitelne = (v.polozky || []).filter(
+    x => x.verdikt === "dobre" || x.verdikt === "ciastocne");
+  let html = `<div class="karta"><h3 style="margin-top:0">Prehľad priečinka —
+    ${v.spolu || 0} videí</h3>
+    <div class="mriezka">
+      <div class="udaj"><b>Zachrániteľné celé</b><span>${p.dobre || 0}</span></div>
+      <div class="udaj"><b>Čiastočne (bez zvuku)</b><span>${p.ciastocne || 0}</span></div>
+      <div class="udaj"><b>Zašifrované celé</b><span>${p.nezachranitelne || 0}</span></div>
+      <div class="udaj"><b>Nečitateľné</b><span>${p.chyba || 0}</span></div>
+    </div>`;
+  if (zachranitelne.length) {
+    html += `<div class="riadok" style="margin-top:14px">
+      <button id="btnDavkaPrehlad">Opraviť všetkých ${zachranitelne.length} zachrániteľných…</button>
+      </div>`;
+  }
+  html += `<table style="margin-top:12px"><tr><th>Súbor</th><th>Veľkosť</th>
+    <th>Stav</th><th>Poznámka</th></tr>`;
+  for (const x of (v.polozky || [])) {
+    const t = VERDIKTY[x.verdikt] || VERDIKTY.chyba;
+    html += `<tr><td>${esc(x.subor)}</td><td>${esc(x.velkost_citatelne || "")}</td>
+      <td><span class="znacka ${t.znacka}">${t.text}</span></td>
+      <td class="popis" style="margin:0">${esc(x.poznamka || "")}</td></tr>`;
+  }
+  html += `</table></div>`;
+  el.innerHTML = html;
+
+  const btn = document.getElementById("btnDavkaPrehlad");
+  if (btn) btn.onclick = async () => {
+    const vystup = await vyberCestu({
+      nadpis: "Kam uložiť opravené videá?",
+      start: priecinok,
+      rezim: "priecinok",
+      pomoc: "Vyber priečinok pre výsledky. Pôvodné súbory sa nemenia.",
+    });
+    if (!vystup) return;
+    prepniPanel("panel-oprava");
+    const priebeh = document.getElementById("opravaObsah");
+    priebeh.innerHTML = `<div id="priebehOpravy"></div>`;
+    spustiDavkuZoZoznamu(zachranitelne.map(x => x.cesta), vystup);
+  };
+}
+
+async function spustiDavkuZoZoznamu(subory, vystup) {
+  const priebeh = document.getElementById("priebehOpravy");
+  priebeh.insertAdjacentHTML("beforeend", `<div class="karta" id="kartaDavky">
+    <h3 style="margin-top:0"><span class="spinner"></span>
+      Dávková oprava — ${subory.length} súborov</h3>
+    <div class="riadok"><button class="tichy" id="btnPrerusit">Prerušiť</button></div>
+    <pre class="log" id="logDavky"></pre></div>`);
+  const log = document.getElementById("logDavky");
+  try {
+    const { uloha } = await api("/api/davka", {
+      subory, vystup,
+      volby: { fps: 30, orezat: true, rychle_hladanie: true },
+    });
+    document.getElementById("btnPrerusit").onclick = () =>
+      api("/api/uloha/zrusit", { id: uloha }).catch(() => {});
+    sledujUlohu(uloha, riadky => {
+      log.textContent += riadky.map(r => r.text).join("\n") + "\n";
+      log.scrollTop = log.scrollHeight;
+    }, s => vykresliDavku(s));
+  } catch (e) { hlaska(e.message, true); }
+}
 document.getElementById("cestaVstup").addEventListener("keydown", e => {
   if (e.key === "Enter") prejst(e.target.value);
 });
@@ -251,6 +353,22 @@ function vykresliAnalyzu(a) {
   const d = a.detail || {};
   let html = "";
 
+  if ((a.mapa_sifrovania || {}).cely_subor) {
+    html += `<div class="karta" style="border-color:var(--zle)">
+      <h3 style="margin-top:0">Tento súbor sa zachrániť nedá
+        <span class="znacka zla">zašifrovaný celý</span></h3>
+      <p class="popis">Preverením celého súboru sa zistilo, že zašifrovaný je
+      <b>celý jeho obsah</b> (${Math.round((a.mapa_sifrovania.podiel || 0) * 100)} %
+      preverených blokov), nie len začiatok. Nezostalo v ňom nič pôvodné, z čoho by
+      sa dal obraz poskladať — a to nedokáže žiadny nástroj, nielen tento.</p>
+      <p class="popis">Ransomvér šifruje celý obsah pri menších súboroch; pri veľkých
+      (rádovo gigabajtových) mu to trvá príliš dlho, preto tam prepíše len začiatok.
+      <b>Preto sa oplatí skúsiť tie najväčšie videá</b> — tie bývajú zachrániteľné.
+      Pri tomto súbore skús ešte vyhľadať príponu na
+      <a href="https://www.nomoreransom.org/" target="_blank" rel="noopener">nomoreransom.org</a>,
+      či pre danú rodinu ransomvéru neexistuje bezplatný dešifrovač.</p></div>`;
+  }
+
   const kont = (a.kandidati_kontajnera || [])[0];
   html += `<div class="karta"><h3 style="margin-top:0">Súbor</h3><div class="mriezka">
     <div class="udaj"><b>Názov</b><span>${esc(a.subor)}</span></div>
@@ -314,19 +432,20 @@ function vykresliAnalyzu(a) {
       </div>`;
   }
 
-  // graf entropie
-  if (a.entropia && a.entropia.length) {
-    const hranica = (a.odhad_sifrovanej_casti || {}).koniec;
+  // mapa šifrovania — červené bloky sú prepísané ransomvérom
+  const mapa = a.mapa_sifrovania || {};
+  if ((mapa.body || []).length) {
     html += `<div class="karta"><h3 style="margin-top:0">Mapa súboru</h3>
       <div class="graf">` +
-      a.entropia.map(b => {
-        const v = Math.max(2, Math.round((b.entropy / 8) * 100));
-        const sif = hranica !== null && hranica !== undefined && b.offset < hranica;
-        return `<div class="${sif ? "sifrovane" : ""}" style="height:${v}%" title="${bajty(b.offset)} · entropia ${b.entropy}"></div>`;
+      mapa.body.map(b => {
+        // logaritmická mierka: šifrované ~255, pôvodné dáta až desaťtisíce
+        const v = Math.max(6, Math.min(100, Math.round(Math.log10(Math.max(1, b.chi2)) * 22)));
+        return `<div class="${b.sifrovane ? "sifrovane" : ""}" style="height:${v}%"
+          title="${bajty(b.offset)} · ${b.sifrovane ? "zašifrované" : "pôvodné dáta"} (chí² ${b.chi2})"></div>`;
       }).join("") + `</div>
-      <div class="legenda"><span><i style="background:var(--zle)"></i>zašifrovaná časť</span>
-        <span><i style="background:var(--akcent)"></i>pôvodné dáta</span>
-        <span>výška stĺpca = entropia bloku</span></div></div>`;
+      <div class="legenda"><span><i style="background:var(--zle)"></i>zašifrované
+        (${Math.round((mapa.podiel || 0) * 100)} % súboru)</span>
+        <span><i style="background:var(--akcent)"></i>pôvodné dáta</span></div></div>`;
   }
 
   html += `<details class="karta"><summary>Prvých 160 bajtov súboru</summary>
@@ -353,7 +472,7 @@ function pripravOpravu(a) {
   });
   stavAplikacie.strategia = strategie.length ? strategie[0].id : null;
 
-  html += `<div class="karta"><h3 style="margin-top:0">Kam uložiť výsledok</h3>
+  html += `<div class="karta" id="kartaVystupu"><h3 style="margin-top:0">Kam uložiť výsledok</h3>
     <div class="riadok">
       <input type="text" id="vystupPriecinok" value="${esc(stavAplikacie.vystup)}"
              spellcheck="false">
@@ -483,7 +602,16 @@ function aktualizujSpustit() {
   if (!btn) return;
   const chybaFfmpeg = !stavAplikacie.maFfmpeg
     && VYZADUJU_FFMPEG.includes(stavAplikacie.strategia);
-  btn.disabled = chybaFfmpeg || !stavAplikacie.vystupOk;
+  const nezachranitelne = stavAplikacie.strategia === "nezachranitelne";
+  btn.disabled = chybaFfmpeg || !stavAplikacie.vystupOk || nezachranitelne;
+  const kartaVystupu = document.getElementById("kartaVystupu");
+  if (kartaVystupu) kartaVystupu.hidden = nezachranitelne;
+  btn.hidden = nezachranitelne;
+  if (nezachranitelne) {
+    if (poznamka) poznamka.innerHTML =
+      `<span class="znacka zla">nie je čo opravovať</span> Súbor je zašifrovaný celý.`;
+    return;
+  }
   if (poznamka) {
     poznamka.innerHTML = chybaFfmpeg
       ? `<span class="znacka zla">chýba ffmpeg</span> Tento postup ho potrebuje.

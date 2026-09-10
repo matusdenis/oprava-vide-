@@ -835,6 +835,10 @@ def estimate_encrypted_prefix(mm, size: int, block: int = 262144,
                 first_good = i * block
                 break
     if first_good is None:
+        if log:
+            log(f"  POZOR: v prvých {n_blocks * block // (1 << 20)} MiB súboru sa "
+                f"nenašla ani jedna neporušená časť — dáta vyzerajú ako celé "
+                f"zašifrované.")
         return {"koniec": None, "spolahlivost": "nízka",
                 "poznamka": ("Nepodarilo sa nájsť neporušenú časť — súbor môže byť "
                              "zašifrovaný celý."),
