@@ -146,18 +146,19 @@ def navrhni_strategie(rep: dict) -> list:
     # Zašifrovaný celý súbor nemá zmysel opravovať — nie je v ňom čo zachrániť.
     # Radšej to povedať rovno, než nechať používateľa čakať na neúspech.
     mapa = rep.get("mapa_sifrovania") or {}
-    if mapa.get("cely_subor"):
+    if mapa.get("cely_subor") or mapa.get("podiel", 0) > 0.55:
         return [{
             "id": "nezachranitelne",
             "nazov": "Tento súbor sa zachrániť nedá",
             "vhodnost": "žiadna",
-            "popis": (f"Zašifrovaný je celý obsah súboru "
-                      f"({mapa.get('podiel', 0) * 100:.0f} % preverených blokov), "
-                      "nielen jeho začiatok. Nezostalo v ňom nič pôvodné, z čoho by "
-                      "sa dal obraz poskladať — a to nedokáže žiadny nástroj, nielen "
-                      "tento. Ransomvér šifruje celý obsah pri menších súboroch; "
-                      "pri veľkých (rádovo gigabajtových) mu to trvá príliš dlho, "
-                      "preto tam prepíše len začiatok a tie sa zachrániť dajú."),
+            "popis": (f"Prepísaných je {mapa.get('podiel', 0) * 100:.0f} % obsahu "
+                      "súboru, nielen jeho začiatok. Ransomvér tu použil prekladané "
+                      "šifrovanie — šifruje po blokoch a medzi nimi necháva kusy "
+                      "pôvodných dát. Tie sú však také rozdrobené a je ich tak málo, "
+                      "že sa z nich súvislé video poskladať nedá; navyše je prepísaný "
+                      "aj index na konci súboru. Zachrániť sa dajú videá, kde ostal "
+                      "neporušený index a väčšina dát — pri veľkých súboroch, kde by "
+                      "šifrovanie celého obsahu trvalo príliš dlho."),
             "ocakavany_vysledok": ("Bez dešifrovacieho kľúča nič. Skús priponu súboru "
                                    "vyhľadať na nomoreransom.org — pre niektoré rodiny "
                                    "ransomvéru existuje bezplatný dešifrovač."),
@@ -248,9 +249,16 @@ def rychly_verdikt(cesta: str, vzoriek: int = 12) -> dict:
         sifrovanych = sum(1 for h in hodnoty if h < carve.PRAH_CHI2)
         podiel = sifrovanych / max(1, len(hodnoty))
         vysledok["podiel_sifrovania"] = round(podiel, 3)
-        if podiel > 0.90:
+        if podiel > 0.985:
             return {**vysledok, "verdikt": "nezachranitelne", "postup": None,
                     "poznamka": "zašifrovaný celý obsah"}
+        if podiel > 0.55:
+            # Prekladané šifrovanie: medzi zašifrovanými blokmi ostávajú kusy
+            # pôvodných dát, ale je ich tak málo a sú tak rozdrobené, že sa
+            # z nich súvislé video poskladať nedá.
+            return {**vysledok, "verdikt": "nezachranitelne", "postup": None,
+                    "poznamka": f"prekladané šifrovanie — prepísaných "
+                                f"{podiel * 100:.0f} % obsahu"}
         moov = mp4.najdi_moov(mm, size)
         if moov is not None:
             return {**vysledok, "verdikt": "dobre", "postup": "mp4_graft",
@@ -299,6 +307,35 @@ def rozbor(path: str, db, toolbox=None, log=print) -> dict:
         with open(path, "rb") as fh:
             log("\nPrvých 64 bajtov:")
             log(hexdump(fh.read(64), 0, 64))
+
+        # 1a) husta mapa - kazdy blok, nie len vzorka
+        blok_m = 262144
+        n_blokov = size // blok_m
+        if n_blokov <= 8192:
+            log(f"\nPodrobná mapa ({n_blokov} blokov po 256 KiB):")
+            log("  # = zašifrované,  . = pôvodné dáta\n")
+            znaky = []
+            neporusene = []
+            zaciatok = None
+            for i in range(n_blokov):
+                sif = _carve.chi2_rovnomernosti(mm, i * blok_m, blok_m) < _carve.PRAH_CHI2
+                znaky.append("#" if sif else ".")
+                if not sif and zaciatok is None:
+                    zaciatok = i * blok_m
+                elif sif and zaciatok is not None:
+                    neporusene.append((zaciatok, i * blok_m))
+                    zaciatok = None
+            if zaciatok is not None:
+                neporusene.append((zaciatok, n_blokov * blok_m))
+            for r in range(0, len(znaky), 64):
+                log(f"  {r * blok_m // (1 << 20):>5} MiB  " + "".join(znaky[r:r + 64]))
+            celkom = sum(b - a for a, b in neporusene)
+            log(f"\n  Neporušených dát: {human(celkom)} "
+                f"({celkom / max(1, size) * 100:.1f} %) v {len(neporusene)} súvislých úsekoch")
+            for a, b in neporusene[:14]:
+                log(f"    {human(a):>10} – {human(b):>10}   ({human(b - a)})")
+            if len(neporusene) > 14:
+                log(f"    … a ďalších {len(neporusene) - 14}")
 
         # 1) kde je subor zasifrovany - chi-kvadrat po 256 KiB
         blok = 262144
