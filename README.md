@@ -41,7 +41,7 @@ PO OPRAVE          [ftyp][mdat(64-bit) ........][ ...dáta... ...][moov: index]
 | MP4/MOV typu *faststart*, index zničený | vyrezanie obrazu + rekonštrukcia parametrov skúšaním | obraz (zvuk sa bez indexu priradiť nedá) |
 | MTS/M2TS/TS (AVCHD, kamery) | znovunájdenie paketov + doplnenie parametrov | obraz aj zvuk |
 | Ľahké poškodenie | priame prebalenie cez ffmpeg | celý súbor |
-| Máš zdravý súbor z toho istého zariadenia | untrunc, alebo prevzatie hlavičky do databázy | najlepšia možná presnosť |
+| Máš ďalšie videá z tej istej kamery (**aj poškodené**) | prevzatie parametrov z ich hlavičiek | najlepšia možná presnosť |
 
 Program navyše:
 
@@ -193,11 +193,15 @@ stream. Potom sa postupuje od najistejšieho zdroja parametrov k najmenej istém
 1. parametre nájdené **priamo v tele streamu** — takto ich nesú toky MTS/M2TS
    a AVCHD, kde sa opakujú pri každom kľúčovom snímku, takže stačí skopírovať
    ich na začiatok;
-2. parametre z **`avcC`/`hvcC` zdravého súboru** z rovnakého zariadenia. Pri
-   súboroch MP4 je to jediná spoľahlivá cesta pre H.265: kamery aj ffmpeg pri
-   zápise do MP4 parametre z tela streamu odoberú a uložia ich len do hlavičky,
-   takže po jej zašifrovaní v súbore nezostanú. Stačí akékoľvek iné zdravé video
-   z tej istej kamery, hoci len pár sekúnd;
+2. parametre z **`avcC`/`hvcC` iného videa z tej istej kamery** — a to
+   **vrátane poškodených súborov**. Toto je najdôležitejšia cesta pre H.265 v MP4:
+   kamery aj ffmpeg pri zápise do MP4 parametre z tela streamu odoberú a uložia
+   ich len do hlavičky, takže po jej zašifrovaní v súbore nezostanú. Zdravý
+   súbor však na to netreba: ransomvér šifruje len začiatok, takže v ostatných
+   zašifrovaných videách z tej istej kamery index `moov` na konci väčšinou
+   prežije aj s parametrami. Program preto sám prehľadá priečinok s opravovaným
+   súborom (a prípadne ďalší, ktorý zadáš) a všetky nájdené sady parametrov
+   vyskúša;
 3. **skúšanie kombinácií** (len H.264): program poskladá SPS/PPS pre mriežku možností
    (rozlíšenie × profil × CABAC/CAVLC × spôsob číslovania snímkov), každú predradí
    vzorke streamu a nechá ffmpeg dekódovať. Vyhráva tá s najlepším pomerom
@@ -229,6 +233,9 @@ naň zapísať nie. Vtedy stačí zvoliť priečinok na internom disku.
   ransomvéru existujú bezplatné dešifrovače.
 * **Pri zničenom indexe sa zvuk zachrániť nedá.** Zvukové vzorky sú v súbore
   premiešané s obrazovými a bez tabuliek ich nemožno spoľahlivo odlíšiť.
+* **Ak máš z kamery len jediné video a to má zničený index**, pri H.265 sa
+  parametre vziať odkiaľ nedá. Oplatí sa prehľadať zálohy, telefón, staré karty
+  aj kôš — postačí akýkoľvek iný záznam z tej istej kamery, hoci zašifrovaný.
 * **Orezanie ide len po kľúčový snímok.** Pri kamerách býva každú 1 – 2 sekundy,
   takže strata je malá. Ak sú kľúčové snímky ďaleko od seba, orezanie zoberie
   viac — plná verzia zostáva k dispozícii tiež.

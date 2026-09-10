@@ -764,18 +764,49 @@ def damage_map(mm, track, struct_start: int, max_checks: int = 4000, hevc: bool 
     }
 
 
-def codec_parameter_sets(path: str) -> bytes:
-    """Vytiahne parametre obrazu zo zdraveho MP4/MOV - pre H.264 aj H.265.
+def najdi_moov(mm, size: int, chvost: int = 256 << 20):
+    """Najde index `moov` - najprv rychlo na konci suboru, az potom dokladne.
 
-    Ak ma pouzivatel k dispozicii hoci len jeden neposkodeny subor z rovnakeho
-    zariadenia (aj uplne ine, kratke video), su v nom presne tie parametre,
-    ktore poskodenemu suboru chybaju. Pre H.264 su v boxe `avcC`, pre H.265
-    v boxe `hvcC` - ten ma iné rozlozenie, preto sa citaju osobitne.
+    Kamery zapisuju `moov` na koniec, takze prehladavat kvoli nemu cely
+    niekolkogigabajtovy subor je zbytocne. Az ked sa na konci nenajde, prejde
+    sa cely subor.
+    """
+    zaciatok = max(0, size - chvost)
+    najlepsi = None
+    pos = zaciatok
+    while True:
+        idx = mm.find(b"moov", pos)
+        if idx < 0:
+            break
+        box = read_box_header(mm, idx - 4, size)
+        if box is not None and box.type == b"moov" and box.end <= size:
+            vnutro = read_box_header(mm, box.data_offset, size)
+            if vnutro is not None and vnutro.type in (b"mvhd", b"trak", b"udta", b"iods"):
+                najlepsi = box
+                break
+        pos = idx + 1
+    if najlepsi is not None:
+        return najlepsi
+    st = locate_intact_structure(mm, size)
+    if st is None:
+        return None
+    return next((b for b in st["boxes"] if b.type == b"moov"), None)
+
+
+def codec_parameter_sets(path: str) -> bytes:
+    """Vytiahne parametre obrazu z MP4/MOV - pre H.264 aj H.265.
+
+    Funguje aj na POSKODENOM subore: index `moov` byva na konci suboru, takze
+    ransomver ho zvycajne nezasiahne. Vdaka tomu sa parametre kamery daju
+    vytiahnut aj z ineho zasifrovaneho videa z toho isteho zariadenia - a
+    pouzit ako nahrada tam, kde index neprezil.
+
+    Pre H.264 su parametre v boxe `avcC`, pre H.265 v `hvcC` - ten ma iné
+    rozlozenie, preto sa citaju osobitne.
     """
     f, mm, size = open_mm(path)
     try:
-        boxes, _ = chain_from(mm, 0, size)
-        moov = next((b for b in boxes if b.type == b"moov"), None)
+        moov = najdi_moov(mm, size)
         if moov is None:
             return b""
         moov.children = parse_tree(mm, moov.data_offset, moov.end, size)
@@ -802,7 +833,28 @@ def codec_parameter_sets(path: str) -> bytes:
                     pos += n
         if out:
             return b"".join(out)
-        return avcc_parameter_sets(path)
+        for avcc in moov.find_all(b"avcC"):
+            d = mm[avcc.data_offset:avcc.end]
+            if len(d) < 7:
+                continue
+            pos = 5
+            for pocet_kluc in (d[pos] & 0x1F, None):
+                if pocet_kluc is None:
+                    if pos < len(d):
+                        pocet_kluc = d[pos]
+                        pos += 1
+                    else:
+                        break
+                else:
+                    pos += 1
+                for _ in range(pocet_kluc):
+                    if pos + 2 > len(d):
+                        break
+                    n = int.from_bytes(d[pos:pos + 2], "big")
+                    pos += 2
+                    out.append(b"\x00\x00\x00\x01" + d[pos:pos + n])
+                    pos += n
+        return b"".join(out)
     finally:
         mm.close()
         f.close()
@@ -817,8 +869,7 @@ def avcc_parameter_sets(path: str) -> bytes:
     """
     f, mm, size = open_mm(path)
     try:
-        boxes, _ = chain_from(mm, 0, size)
-        moov = next((b for b in boxes if b.type == b"moov"), None)
+        moov = najdi_moov(mm, size)
         if moov is None:
             return b""
         moov.children = parse_tree(mm, moov.data_offset, moov.end, size)

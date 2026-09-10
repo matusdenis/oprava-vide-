@@ -634,7 +634,7 @@ def only_parameter_sets(data: bytes, hevc: bool = False) -> bytes:
         if nxt < 0:
             break
         pos = nxt
-    return b"".join(out) if out else data
+    return b"".join(out)
 
 
 def parse_hevc_sps(nal: bytes) -> dict | None:

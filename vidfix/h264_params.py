@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 import re
 
+from . import carve
+
 START_CODE = b"\x00\x00\x00\x01"
 
 # Rozlisenia, ktore sa skusaju, ked pouzivatel nevie povedat, ake video to bolo.
@@ -244,19 +246,33 @@ def find_best_headers(toolbox, stream_path: str, workdir: str, resolutions=None,
         return None
     # Najprv sa skusia hotove hlavicky (najdene v tele streamu alebo vytiahnute
     # z ineho suboru z rovnakeho zariadenia) - byvaju presne spravne.
-    polozky = [{"popis": e["popis"], "blob": e["blob"], "kandidat": e.get("kandidat")}
-               for e in (extra or [])]
+    polozky = []
+    for e in (extra or []):
+        kandidat = e.get("kandidat")
+        if kandidat is None and e.get("blob"):
+            # Aj pri hotovej hlavičke vieme povedať, aké rozlíšenie prináša —
+            # stačí z nej prečítať SPS.
+            sps = (carve.find_nal_in_annexb(e["blob"], 33, hevc=True) if hevc
+                   else carve.find_sps_in_annexb(e["blob"]))
+            info = ((carve.plausible_hevc_sps(sps) if hevc else carve.plausible_sps(sps))
+                    if sps else None)
+            if info:
+                kandidat = {"sirka": info["sirka"], "vyska": info["vyska"],
+                            "profile_idc": info["profile_idc"], "profil": info["profil"],
+                            "zdroj": "vzorový súbor"}
+        polozky.append({"popis": e["popis"], "blob": e["blob"], "kandidat": kandidat})
     # Parametre H.265 sa poskladať naslepo nedajú (profile_tier_level má príliš
     # veľa kombinácií), preto sa pri ňom skúšajú len hotové hlavičky.
     grid = [] if hevc else candidate_grid(resolutions, quick=quick)[:max_tries]
     polozky += [{"popis": None, "blob": None, "kandidat": c} for c in grid]
     if log:
-        log(f"  skúšam až {len(polozky)} možností parametrov H.264 "
+        log(f"  skúšam až {len(polozky)} možností parametrov "
+            f"{'H.265' if hevc else 'H.264'} "
             f"(vzorka {len(sample) // (1 << 20)} MiB)…")
     best = None
     for i, item in enumerate(polozky, 1):
         cand = item["kandidat"] or {}
-        blob = item["blob"] if item["blob"] is not None else blob_for(cand)
+        blob = item["blob"] if item.get("blob") else blob_for(cand)
         res = score_headers(toolbox, blob, sample, workdir, hevc=hevc)
         if best is None or res["skore"] > best["vysledok"]["skore"]:
             best = {"kandidat": cand, "vysledok": res, "hlavicka": blob}

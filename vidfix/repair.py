@@ -77,6 +77,77 @@ def _copy_with_prefix(src: str, dst: str, prefix: bytes, zero_until: int = 0,
     return written
 
 
+# Pripony, podla ktorych sa hlada video. Hlada sa kdekolvek v nazve, aby
+# presli aj subory premenovane ransomverom (napr. "dovolenka.MP4.locked").
+VIDEO_PRIPONY = (".mp4", ".mov", ".m4v", ".3gp", ".mts", ".m2ts", ".ts", ".m2t")
+
+
+def _mozne_video(cesta: str) -> bool:
+    nazov = os.path.basename(cesta).lower()
+    if any(p in nazov for p in VIDEO_PRIPONY):
+        return True
+    try:
+        return os.path.getsize(cesta) > (20 << 20)
+    except OSError:
+        return False
+
+
+def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
+    """Pozbiera parametre obrazu z ostatných videí v okolí.
+
+    Kľúčové je, že sa hľadá aj v POŠKODENÝCH súboroch: ransomvér šifruje len
+    začiatok, takže index `moov` na konci väčšinou prežije a je v ňom hlavička
+    `avcC`/`hvcC` s presnými parametrami kamery. Používateľ tak nepotrebuje ani
+    jeden zdravý súbor — stačí, že má z tej istej kamery ešte nejaké iné video,
+    hoci rovnako zašifrované.
+    """
+    miesta = []
+    vzor = ctx.options.get("vzor")
+    if vzor and os.path.exists(vzor):
+        miesta.append(vzor)
+    miesta.append(os.path.dirname(ctx.path))
+
+    subory = []
+    for miesto in miesta:
+        if os.path.isfile(miesto):
+            subory.append(miesto)
+        elif os.path.isdir(miesto):
+            try:
+                with os.scandir(miesto) as it:
+                    subory += [e.path for e in it if e.is_file() and _mozne_video(e.path)]
+            except OSError:
+                continue
+    subory = [s for s in dict.fromkeys(subory) if os.path.abspath(s) != ctx.path]
+    if not subory:
+        return []
+
+    ctx.log(f"Hľadám parametre kamery v ostatných videách v okolí "
+            f"({len(subory)} súborov, prehľadávajú sa aj poškodené)…")
+    kandidati = []
+    videne = set()
+    for cesta in subory[:max_suborov]:
+        try:
+            surove = mp4.codec_parameter_sets(cesta)
+        except (OSError, ValueError):
+            continue
+        ps = carve.only_parameter_sets(surove, hevc)
+        if not ps or ps in videne:
+            continue
+        videne.add(ps)
+        sps = (carve.find_nal_in_annexb(ps, 33, hevc=True) if hevc
+               else carve.find_sps_in_annexb(ps))
+        info = ((carve.plausible_hevc_sps(sps) if hevc else carve.plausible_sps(sps))
+                if sps else None)
+        nazov = os.path.basename(cesta)
+        popis = (f"parametre z {nazov} ({info['sirka']}×{info['vyska']}, {info['profil']})"
+                 if info else f"parametre z {nazov}")
+        ctx.log(f"  našiel som {popis}")
+        kandidati.append({"popis": popis, "blob": ps, "kandidat": None})
+    if not kandidati:
+        ctx.log("  v okolitých videách sa parametre nenašli")
+    return kandidati
+
+
 def _do_mp4(ctx: Ctx, raw: str, dst: str, hevc: bool, fps: int) -> dict | None:
     """Zabalí surový obrazový stream do MP4, aby sa dal normálne prehrať.
 
@@ -367,26 +438,16 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
                  f"{info['profil']})" if info else "parametre z tela streamu")
         ctx.log(f"V tele streamu sa našli {popis} — použijem ich.")
         extra.append({"popis": popis, "blob": vlastne, "kandidat": None})
-    vzor = ctx.options.get("vzor")
-    if vzor and os.path.exists(vzor):
-        try:
-            ps = carve.only_parameter_sets(mp4.codec_parameter_sets(vzor), hevc)
-            if ps:
-                ctx.log(f"Zo vzorového súboru {os.path.basename(vzor)} vytiahnuté "
-                        f"parametre ({len(ps)} B) — vyskúšam ich ako prvé.")
-                extra.insert(0, {"popis": f"parametre zo vzoru "
-                                          f"{os.path.basename(vzor)}",
-                                 "blob": ps, "kandidat": None})
-        except (OSError, ValueError) as exc:
-            ctx.log(f"Vzorový súbor sa nedá prečítať: {exc}")
+    extra += _zbieraj_vzory(ctx, hevc)
 
     hlavicka = b""
     najdene = None
     if hevc and not extra:
-        ctx.log("Stream je H.265 a parametre sa v ňom nenašli. Poskladať ich naslepo "
-                "sa pri H.265 nedá — potrebujem zdravé video z tej istej kamery "
-                "(stačí akékoľvek, aj krátke). Zadaj ho do poľa „Zdravý vzorový "
-                "súbor“ a spusti opravu znova.")
+        ctx.log("Stream je H.265, ale parametre kamery sa nenašli ani v ňom, ani "
+                "v okolitých videách. Poskladať ich naslepo sa pri H.265 nedá — "
+                "je ich príliš veľa kombinácií. Skús do poľa „Zdravý vzorový súbor“ "
+                "zadať priečinok s ďalšími videami z tej istej kamery; stačia aj "
+                "poškodené, parametre sa dajú vytiahnuť aj z nich.")
     if extra or not hevc:
         rozlisenia = None
         if ctx.options.get("sirka") and ctx.options.get("vyska"):

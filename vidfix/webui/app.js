@@ -285,9 +285,13 @@ function pripravOpravu(a) {
       <div class="volba siroka" data-volba="fps"><label>Snímková frekvencia výsledku</label>
         <input type="number" id="volbaFps" value="30" style="max-width:120px">
         <div class="disky" id="predvolbyFps" style="margin-top:8px"></div></div>
-      <div class="volba" data-volba="vzor"><label>Zdravý vzorový súbor z rovnakého
-        zariadenia (nepovinné)</label>
-        <input type="text" id="volbaVzor" placeholder="cesta k zdravému súboru"></div>
+      <div class="volba" data-volba="vzor"><label>Iné video z tej istej kamery
+        (nepovinné) — <b>stačí aj poškodené</b></label>
+        <input type="text" id="volbaVzor" placeholder="cesta k súboru alebo priečinku">
+        <p class="popis" style="margin:6px 0 0;font-size:11.5px">Program automaticky
+        prehľadá aj priečinok, v ktorom leží opravovaný súbor. Parametre kamery sa
+        dajú vytiahnuť aj zo zašifrovaných videí — ransomvér poškodí len začiatok,
+        takže hlavička na konci súboru väčšinou prežije.</p></div>
       <div class="volba" data-volba="orezanie"><label><input type="checkbox" id="volbaOrezat" checked>
         Vyrobiť aj čistú verziu bez poškodeného začiatku</label></div>
       <div class="volba" data-volba="hladanie"><label><input type="checkbox" id="volbaRychle" checked>
