@@ -220,7 +220,7 @@ def navrhni_strategie(rep: dict) -> list:
     return out
 
 
-def rychly_verdikt(cesta: str, vzoriek: int = 12) -> dict:
+def rychly_verdikt(cesta: str, vzoriek: int = 8) -> dict:
     """Rýchlo posúdi jeden súbor: dá sa zachrániť, alebo je zašifrovaný celý?
 
     Neprechádza celý súbor — vzorkuje rovnomerne rozložené bloky a pozrie sa,
@@ -259,11 +259,11 @@ def rychly_verdikt(cesta: str, vzoriek: int = 12) -> dict:
             return {**vysledok, "verdikt": "nezachranitelne", "postup": None,
                     "poznamka": f"prekladané šifrovanie — prepísaných "
                                 f"{podiel * 100:.0f} % obsahu"}
-        moov = mp4.najdi_moov(mm, size)
+        moov = mp4.najdi_moov(mm, size, rychlo=True)
         if moov is not None:
             return {**vysledok, "verdikt": "dobre", "postup": "mp4_graft",
                     "poznamka": "index prežil — obraz aj zvuk"}
-        sync = carve.find_ts_sync(mm, size, search_limit=8 << 20)
+        sync = carve.find_ts_sync(mm, size, search_limit=4 << 20)
         if sync:
             return {**vysledok, "verdikt": "dobre", "postup": "ts_resync",
                     "poznamka": "tok MPEG-TS"}
@@ -276,11 +276,17 @@ def rychly_verdikt(cesta: str, vzoriek: int = 12) -> dict:
 
 def prehlad_priecinka(subory: list, log=None) -> dict:
     """Pretriedi zoznam súborov na zachrániteľné a nezachrániteľné."""
+    import time
     polozky = []
+    zaciatok = time.time()
     for i, cesta in enumerate(subory, 1):
         polozky.append(rychly_verdikt(cesta))
-        if log and (i % 25 == 0 or i == len(subory)):
-            log(f"  preverených {i} z {len(subory)}…")
+        if log and (i % 5 == 0 or i == len(subory)):
+            ubehlo = time.time() - zaciatok
+            zostava = ubehlo / i * (len(subory) - i)
+            log(f"  preverených {i} z {len(subory)} "
+                f"(zostáva asi {int(zostava // 60)} min {int(zostava % 60)} s) — "
+                f"{os.path.basename(cesta)[:40]}")
     poradie = {"dobre": 0, "ciastocne": 1, "nezachranitelne": 2, "chyba": 3}
     polozky.sort(key=lambda p: (poradie.get(p.get("verdikt"), 9), -p.get("velkost", 0)))
     pocty = {}

@@ -764,29 +764,45 @@ def damage_map(mm, track, struct_start: int, max_checks: int = 4000, hevc: bool 
     }
 
 
-def najdi_moov(mm, size: int, chvost: int = 256 << 20):
-    """Najde index `moov` - najprv rychlo na konci suboru, az potom dokladne.
+def najdi_moov(mm, size: int, chvost: int = 256 << 20, rychlo: bool = False):
+    """Najde index `moov`. Hlada od konca suboru, po stale vacsich krokoch.
 
-    Kamery zapisuju `moov` na koniec, takze prehladavat kvoli nemu cely
-    niekolkogigabajtovy subor je zbytocne. Az ked sa na konci nenajde, prejde
-    sa cely subor.
+    Kamery zapisuju `moov` uplne na koniec, takze pri drvivej vacsine suborov
+    staci precitat poslednych par megabajtov. Preto sa postupuje od najmensieho
+    okna: pri triedeni stoviek suborov na externom disku je rozdiel medzi
+    precitanim 4 MiB a 256 MiB na subor rozdiel medzi minutami a hodinami.
+
+    S `rychlo=True` sa vynecha zaverecne prehladanie celeho suboru. Pri triedeni
+    je to spravne: ked index nie je ani v poslednych desiatkach MiB, na ucely
+    posudenia je stratený - a prechadzat kvoli tomu cely viacgigabajtovy subor
+    by trvalo neunosne dlho.
     """
-    zaciatok = max(0, size - chvost)
-    najlepsi = None
-    pos = zaciatok
-    while True:
-        idx = mm.find(b"moov", pos)
-        if idx < 0:
-            break
-        box = read_box_header(mm, idx - 4, size)
-        if box is not None and box.type == b"moov" and box.end <= size:
-            vnutro = read_box_header(mm, box.data_offset, size)
-            if vnutro is not None and vnutro.type in (b"mvhd", b"trak", b"udta", b"iods"):
-                najlepsi = box
+    okna = [4 << 20, 32 << 20]
+    if not rychlo:
+        okna.append(chvost)
+    preskumane = size
+    for okno in okna:
+        zaciatok = max(0, size - okno)
+        if zaciatok >= preskumane and zaciatok > 0:
+            continue
+        pos = zaciatok
+        konec = preskumane if preskumane < size else size
+        while True:
+            idx = mm.find(b"moov", pos, konec + 4)
+            if idx < 0:
                 break
-        pos = idx + 1
-    if najlepsi is not None:
-        return najlepsi
+            box = read_box_header(mm, idx - 4, size)
+            if box is not None and box.type == b"moov" and box.end <= size:
+                vnutro = read_box_header(mm, box.data_offset, size)
+                if vnutro is not None and vnutro.type in (b"mvhd", b"trak", b"udta",
+                                                          b"iods"):
+                    return box
+            pos = idx + 1
+        preskumane = zaciatok
+        if zaciatok == 0:
+            break
+    if rychlo:
+        return None
     st = locate_intact_structure(mm, size)
     if st is None:
         return None
