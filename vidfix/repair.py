@@ -214,6 +214,49 @@ def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
     return kandidati
 
 
+def zisti_fps(ctx: Ctx, zaloha: int = 30) -> int:
+    """Zisti snimkovu frekvenciu zaznamu.
+
+    Vyrezany obrazovy stream ziadne casovanie neobsahuje - to bolo v znicenom
+    indexe. Ked sa frekvencia odhadne zle, video sa prehráva privolna alebo
+    prirychlo a vyzera to ako sekanie. Preto sa berie z indexu `moov`, ktory
+    ransomver zvycajne nezasiahne: najprv z opravovaneho suboru, potom zo
+    vzoru a nakoniec z ostatnych videi v tom istom priecinku.
+    """
+    volba = ctx.options.get("fps")
+    if volba:
+        return int(volba)
+
+    miesta = [ctx.path]
+    vzor = ctx.options.get("vzor")
+    if vzor and os.path.exists(vzor):
+        miesta.append(vzor)
+    priecinok = os.path.dirname(ctx.path)
+    try:
+        with os.scandir(priecinok) as it:
+            miesta += sorted(e.path for e in it
+                             if e.is_file() and _mozne_video(e.path))[:20]
+    except OSError:
+        pass
+
+    for cesta in dict.fromkeys(miesta):
+        try:
+            fps = mp4.zaokruhli_fps(mp4.snimkova_frekvencia(cesta))
+        except (OSError, ValueError):
+            continue
+        if not fps:
+            continue
+        odkial = ("z opravovaného súboru" if os.path.abspath(cesta) == ctx.path
+                  else f"zo súboru {os.path.basename(cesta)}")
+        ctx.log(f"Snímková frekvencia {fps}/s ({odkial}).")
+        return fps
+
+    ctx.log(f"Snímkovú frekvenciu sa nepodarilo zistiť — použijem {zaloha}/s. "
+            f"Ak video beží privoľna alebo prirýchlo, zadaj správnu hodnotu "
+            f"voľbou --fps.")
+    return zaloha
+
+
 def _skus_kandidata(ctx: Ctx, mm, size: int, kand: dict, blob: bytes,
                     vzorka: int = 2 << 20) -> dict:
     """Vyreze z daneho miesta kratku vzorku a skusi ju naozaj dekodovat.
@@ -622,7 +665,8 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
         stat = carve.extract_annexb(mm, found["offset"], size, raw, hevc=hevc,
                                     sps_pps=params, max_len=found["max_len"],
                                     kotvy=kotvy, log=ctx.log)
-        ctx.log(f"Vyrezaných {stat['nals']} NAL jednotiek, {human(stat['bytes'])}, "
+        ctx.log(f"Vyrezaných {stat.get('snimky', stat['nals'])} snímkov "
+                f"({stat['nals']} NAL jednotiek, {human(stat['bytes'])}), "
                 f"preskočených medzier: {stat['gaps']}")
     finally:
         mm.close()
@@ -686,7 +730,7 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
                 shutil.copyfileobj(fi, fo, COPY_CHUNK)
         os.replace(docasny, raw)
 
-    fps = ctx.options.get("fps") or 30
+    fps = zisti_fps(ctx)
     dst = ctx.out("zachraneny", ".mp4")
     hotove = _do_mp4(ctx, final_raw, dst, hevc, fps)
     if hotove:
@@ -710,7 +754,7 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
         vystupy.append({"cesta": final_raw,
                         "popis": "Surový obrazový stream (MP4 sa vyrobiť nepodarilo)"})
 
-    zhrnutie = (f"Vyrezaných {stat['nals']} snímkov. "
+    zhrnutie = (f"Vyrezaných {stat.get('snimky', stat['nals'])} snímkov. "
                 + (f"Parametre: {najdene['kandidat']['sirka']}×"
                    f"{najdene['kandidat']['vyska']}."
                    if (najdene and hlavicka and najdene.get("kandidat"))
@@ -740,7 +784,7 @@ def strategia_untrunc(ctx: Ctx) -> dict:
         ctx.log(f"Žiadny zdravý vzor nie je k dispozícii — vyrábam umelý "
                 f"({sirka}×{vyska}) pomocou ffmpeg.")
         carve.synthesize_reference(ctx.toolbox, vzor, width=sirka, height=vyska,
-                                   fps=int(ctx.options.get("fps") or 30), log=ctx.log)
+                                   fps=zisti_fps(ctx), log=ctx.log)
     res = ctx.toolbox.run("untrunc", [vzor, ctx.path], log=ctx.log)
     cakany = ctx.path + "_fixed.mp4"
     vystupy = []

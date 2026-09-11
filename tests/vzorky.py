@@ -13,13 +13,13 @@ from vidfix.tools import Toolbox  # noqa: E402
 
 def vyrob_video(cesta: str, sekundy: int = 12, sirka: int = 640, vyska: int = 360,
                 faststart: bool = False, kontajner: str = "mp4",
-                keyint: int = 30, kodek: str = "h264") -> str:
+                keyint: int = 30, kodek: str = "h264", fps: int = 25) -> str:
     """Vyrobi zdrave testovacie video pomocou ffmpeg."""
     tb = Toolbox()
     if not tb.path("ffmpeg"):
         raise RuntimeError("ffmpeg nie je k dispozicii")
     args = ["-y", "-v", "error",
-            "-f", "lavfi", "-i", f"testsrc2=size={sirka}x{vyska}:rate=25",
+            "-f", "lavfi", "-i", f"testsrc2=size={sirka}x{vyska}:rate={fps}",
             "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
             "-t", str(sekundy), "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"]
     if kodek == "h265":

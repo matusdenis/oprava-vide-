@@ -118,3 +118,4 @@ details summary{cursor:pointer;color:var(--tlmene);font-size:13px;padding:4px 0}
 .dialog .popis{margin:10px 0 0}
 
 .disky button.vybrana{background:var(--akcent);color:#fff;border-color:var(--akcent)}
+.tip{color:var(--tlmene);font-weight:400;font-size:11.5px;margin-left:6px}

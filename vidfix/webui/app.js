@@ -214,7 +214,7 @@ async function spustiDavkuZoZoznamu(subory, vystup) {
   try {
     const { uloha } = await api("/api/davka", {
       subory, vystup,
-      volby: { fps: 30, orezat: true, rychle_hladanie: true },
+      volby: { orezat: true, rychle_hladanie: true },
     });
     document.getElementById("btnPrerusit").onclick = () =>
       api("/api/uloha/zrusit", { id: uloha }).catch(() => {});
@@ -489,8 +489,9 @@ function pripravOpravu(a) {
           <input type="number" id="volbaSirka" placeholder="šírka" style="min-width:70px">
           <input type="number" id="volbaVyska" placeholder="výška" style="min-width:70px"></div>
         <div class="disky" id="predvolbyRozlisenia"></div></div>
-      <div class="volba siroka" data-volba="fps"><label>Snímková frekvencia výsledku</label>
-        <input type="number" id="volbaFps" value="30" style="max-width:120px">
+      <div class="volba siroka" data-volba="fps"><label>Snímková frekvencia výsledku
+        <span class="tip">nechaj prázdne — zistí sa z videa</span></label>
+        <input type="number" id="volbaFps" placeholder="automaticky" style="max-width:140px">
         <div class="disky" id="predvolbyFps" style="margin-top:8px"></div></div>
       <div class="volba" data-volba="vzor"><label>Iné video z tej istej kamery
         (nepovinné) — <b>stačí aj poškodené</b></label>
@@ -541,8 +542,11 @@ function pripravOpravu(a) {
   });
 
   // prednastavené snímkové frekvencie
-  document.getElementById("predvolbyFps").innerHTML = FPS_PREDVOLBY
-    .map(f => `<button data-f="${f}">${f}</button>`).join("");
+  // Prvá voľba je automatika: frekvencia sa prečíta z indexu videa, čo je
+  // spoľahlivejšie než odhad. Ostatné sú pre prípad, že sa zistiť nedá.
+  document.getElementById("predvolbyFps").innerHTML =
+    `<button data-f="" class="vybrany">automaticky</button>` + FPS_PREDVOLBY
+      .map(f => `<button data-f="${f}">${f}</button>`).join("");
   document.querySelectorAll("#predvolbyFps button").forEach(b => b.onclick = () => {
     document.getElementById("volbaFps").value = b.dataset.f;
     document.querySelectorAll("#predvolbyFps button")
@@ -661,7 +665,9 @@ function zozbierajVolby() {
   return {
     sirka: +document.getElementById("volbaSirka").value || null,
     vyska: +document.getElementById("volbaVyska").value || null,
-    fps: +document.getElementById("volbaFps").value || 30,
+    // prázdne pole necháva rozhodnutie na programe: frekvenciu si
+    // prečíta z indexu videa, čo je spoľahlivejšie než odhad
+    fps: +document.getElementById("volbaFps").value || null,
     vzor: document.getElementById("volbaVzor").value || null,
     verzie: stavAplikacie.verzie || "obidve",
     ponechat_medzisubory: (document.getElementById("volbaMedzisubory") || {}).checked || false,

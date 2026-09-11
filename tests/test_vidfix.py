@@ -6,6 +6,7 @@ Testy, ktore potrebuju ffmpeg, sa bez neho automaticky preskocia.
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import sys
 import tempfile
@@ -18,7 +19,7 @@ from vidfix.analyze import (analyze, rychly_verdikt,             # noqa: E402
                             _je_v_tele_video)
 from vidfix.headerdb import HeaderDB                             # noqa: E402
 from vidfix.repair import (Ctx, najdi_medzikroky, najdi_videa,   # noqa: E402
-                           over_vystup,
+                           over_vystup, zisti_fps,
                            spusti, spusti_davku)
 from vidfix.tools import Toolbox                                 # noqa: E402
 from vidfix.util import entropy, human                           # noqa: E402
@@ -408,15 +409,24 @@ class TestVysokyDatovyTok(ZakladVzorky):
             f.close()
 
     def test_v_nahodnych_datach_sa_obraz_nenajde(self):
-        nahodny = self.out("nahodne.bin")
-        with open(nahodny, "wb") as f:
-            f.write(os.urandom(6 << 20))
-        f, mm, size = mp4.open_mm(nahodny)
-        try:
-            self.assertFalse(_je_v_tele_video(mm, size))
-        finally:
-            mm.close()
-            f.close()
+        """Skúša sa viac vzoriek — jedna náhodná zhoda nesmie stačiť.
+
+        Krátky sled NAL jednotiek sa v šifrovaných dátach z času na čas podarí;
+        práve preto sa nález overuje hlbšou prechádzkou. Bez nej hlásil tento
+        test obraz asi v tretine pokusov.
+        """
+        for i in range(6):
+            nahodny = self.out(f"nahodne{i}.bin")
+            with open(nahodny, "wb") as f:
+                f.write(random.Random(1000 + i).randbytes(6 << 20))
+            f, mm, size = mp4.open_mm(nahodny)
+            try:
+                self.assertFalse(_je_v_tele_video(mm, size),
+                                 f"náhodné dáta #{i} sa vyhlásili za video")
+            finally:
+                mm.close()
+                f.close()
+            os.remove(nahodny)
 
     def test_zle_meranie_entropie_nezhodi_verdikt(self):
         # naschvál znefunkčníme test rovnomernosti: všetko bude vyzerať šifrovane
@@ -428,6 +438,50 @@ class TestVysokyDatovyTok(ZakladVzorky):
                                 "štruktúrna kontrola mala súbor zachrániť")
         finally:
             carve.PRAH_CHI2 = povodny
+
+
+@potrebuje_ffmpeg
+class TestSnimkovaFrekvencia(unittest.TestCase):
+    """Vyrezaný stream časovanie neobsahuje — musí sa vziať z indexu.
+
+    Keď sa frekvencia odhadne zle, video sa prehráva privoľna alebo prirýchlo
+    a vyzerá to ako sekanie, hoci sú všetky snímky na mieste.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not MA_FFMPEG:
+            raise unittest.SkipTest("ffmpeg nie je k dispozicii")
+        cls.dir = tempfile.mkdtemp(prefix="vidfix-fps-")
+        cls.zdravy = vyrob_video(os.path.join(cls.dir, "zdrave50.mp4"),
+                                 sekundy=3, fps=50)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def test_frekvencia_sa_precita_z_indexu(self):
+        self.assertEqual(mp4.zaokruhli_fps(mp4.snimkova_frekvencia(self.zdravy)), 50)
+
+    def test_ntsc_sa_zaokruhli(self):
+        self.assertEqual(mp4.zaokruhli_fps(29.97), 30)
+        self.assertEqual(mp4.zaokruhli_fps(59.94), 60)
+        self.assertIsNone(mp4.zaokruhli_fps(None))
+
+    def test_poskodenemu_suboru_pomoze_vzor(self):
+        """Súbor bez indexu si frekvenciu vezme zo vzoru z tej istej kamery."""
+        poskodeny = posifruj_zaciatok(
+            vyrob_video(os.path.join(self.dir, "fs50.mp4"), sekundy=3, fps=50,
+                        faststart=True),
+            os.path.join(self.dir, "fs50_poskodene.mp4"), 256 * 1024)
+        ctx = Ctx(poskodeny, os.path.join(self.dir, "von"), TB, HeaderDB(),
+                  {"vzor": self.zdravy})
+        self.assertEqual(zisti_fps(ctx), 50)
+
+    def test_volba_pouzivatela_ma_prednost(self):
+        ctx = Ctx(self.zdravy, os.path.join(self.dir, "von2"), TB, HeaderDB(),
+                  {"fps": 24, "vzor": self.zdravy})
+        self.assertEqual(zisti_fps(ctx), 24)
 
 
 class TestVystupnyPriecinok(unittest.TestCase):

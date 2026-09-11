@@ -414,6 +414,26 @@ def kotvy_offsety(mm, size: int, hint: int = 0, hevc: bool | None = None,
     return sorted(najdene)
 
 
+# Hlbka overovacej prechadzky a kolko NAL jednotiek musi vydrzat. Skutocne
+# video ich da stovky (namerane 132-400), nahodne data sa zaseknu na osmich -
+# medzi tym je siroka medzera, takze hranica nie je citliva na presne cislo.
+HLBKA_OVERENIA = 400
+MIN_NALS_OVERENIE = 40
+
+
+def naozaj_video(mm, size: int, kandidat: dict) -> bool:
+    """Overi najdeny zaciatok hlbsou prechadzkou.
+
+    Kratka prechadzka sa v nahodnych (zasifrovanych) datach obcas podari -
+    zastavi sa vsak hned, ako splni minimum. Skutocne video pokracuje dalej
+    a dalej, takze staci ist hlbsie a rozdiel je okamzite vidiet.
+    """
+    st = walk_stats(mm, kandidat["offset"], size, kandidat["hevc"],
+                    max_nals=HLBKA_OVERENIA, budget=32 << 20,
+                    max_len=kandidat["max_len"])
+    return st["nals"] >= MIN_NALS_OVERENIE
+
+
 def najdi_kotvy(mm, size: int, hint: int = 0, pocet: int = 24,
                 hevc: bool | None = None, log=None) -> list:
     """Najde zaciatky snimkov podla riadiacich jednotiek kamery.
@@ -525,7 +545,7 @@ def extract_annexb(mm, start: int, end: int, dst_path: str, hevc: bool = False,
     a kus zvuku sa lahko vezme ako obraz, takze sa stream po par snimkoch
     rozpadne.
     """
-    written = nals = gaps = 0
+    written = nals = gaps = snimky = 0
     have_sps = have_pps = False
     pos = start
     ank = sorted(kotvy) if kotvy else None
@@ -561,9 +581,11 @@ def extract_annexb(mm, start: int, end: int, dst_path: str, hevc: bool = False,
             if hevc:
                 have_sps = have_sps or t == 33
                 have_pps = have_pps or t == 34
+                snimky += t in (0, 1, 19, 20, 21)
             else:
                 have_sps = have_sps or t == 7
                 have_pps = have_pps or t == 8
+                snimky += t in (1, 5)
             fo.write(START_CODE)
             fo.write(nal)
             written += 4 + n
@@ -571,7 +593,9 @@ def extract_annexb(mm, start: int, end: int, dst_path: str, hevc: bool = False,
             pos += 4 + n
             if log and nals % 20000 == 0:
                 log(f"  spracovaných {nals} NAL jednotiek ({written // (1 << 20)} MiB)")
-    return {"bytes": written, "nals": nals, "gaps": gaps,
+    # `nals` su vsetky jednotky vratane riadiacich; `snimky` su len obrazove -
+    # to je cislo, ktore nieco hovori pouzivatelovi.
+    return {"bytes": written, "nals": nals, "snimky": snimky, "gaps": gaps,
             "has_sps": have_sps, "has_pps": have_pps, "path": dst_path}
 
 

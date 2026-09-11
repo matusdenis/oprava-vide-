@@ -240,9 +240,16 @@ def _je_v_tele_video(mm, size: int, sond: int = 3, okno: int = 3 << 20) -> bool:
         zaciatok = int(size * podiel)
         if zaciatok + 65536 >= size:
             continue
-        najdene = carve.find_nal_stream(mm, size, hint=zaciatok,
-                                        limit=min(size, zaciatok + okno))
-        if najdene:
+        kraj = min(size, zaciatok + okno)
+        # Oddelovac snimku je najsilnejsi znak - v nahodnych datach sa prakticky
+        # nevyskytne, takze staci jeden a je rozhodnute.
+        if carve.kotvy_offsety(mm, kraj, hint=zaciatok, limit=1):
+            return True
+        najdene = carve.find_nal_stream(mm, size, hint=zaciatok, limit=kraj)
+        # Samotny nalez nestaci: kratka prechadzka sa obcas podari aj v
+        # zasifrovanych datach. Rozhodne az to, ci sled NAL jednotiek pokracuje
+        # aj hlboko za nim.
+        if najdene and carve.naozaj_video(mm, size, najdene):
             return True
     return False
 

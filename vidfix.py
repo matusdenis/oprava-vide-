@@ -259,7 +259,8 @@ def main(argv=None) -> int:
                     help="postup (bez neho sa zvolí najvhodnejší)")
     po.add_argument("--sirka", type=int, help="rozlíšenie pôvodného videa")
     po.add_argument("--vyska", type=int)
-    po.add_argument("--fps", type=int, default=30)
+    po.add_argument("--fps", type=int, default=None,
+                    help="snímková frekvencia; bez nej sa zistí z indexu videa")
     po.add_argument("--vzor", help="zdravý súbor z rovnakého zariadenia")
     po.add_argument("--verzie", default="obidve",
                     choices=["obidve", "len-orezany", "len-opraveny"],
@@ -274,7 +275,8 @@ def main(argv=None) -> int:
                     help="vnútiť jeden postup (inak sa volí pre každý súbor zvlášť)")
     pd.add_argument("--sirka", type=int)
     pd.add_argument("--vyska", type=int)
-    pd.add_argument("--fps", type=int, default=30)
+    pd.add_argument("--fps", type=int, default=None,
+                    help="snímková frekvencia; bez nej sa zistí z indexu videa")
     pd.add_argument("--vzor", help="iné video z tej istej kamery (aj poškodené)")
     pd.add_argument("--verzie", default="obidve",
                     choices=["obidve", "len-orezany", "len-opraveny"])

@@ -876,6 +876,61 @@ def codec_parameter_sets(path: str) -> bytes:
         f.close()
 
 
+def snimkova_frekvencia(path: str) -> float | None:
+    """Zisti snimkovu frekvenciu obrazovej stopy z indexu `moov`.
+
+    Funguje aj na POSKODENOM subore - `moov` byva na konci a ransomver ho
+    zvycajne nezasiahne. Vdaka tomu sa da frekvencia vziat z ineho videa z tej
+    istej kamery, aj keby bolo rovnako zasifrovane.
+
+    Bez nej sa vyrezany obraz zabali s odhadnutou frekvenciou a video sa
+    prehráva privolna alebo prirychlo - co vyzera ako sekanie.
+    """
+    try:
+        f, mm, size = open_mm(path)
+    except OSError:
+        return None
+    try:
+        moov = najdi_moov(mm, size)
+        if moov is None:
+            return None
+        moov.children = parse_tree(mm, moov.data_offset, moov.end, size)
+        for tr in parse_tracks(mm, moov, size):
+            if tr.handler != "vide" or not tr.stts or tr.timescale <= 0:
+                continue
+            # `stts` hovori, kolko trva kazda vzorka. Prevazne je vsade rovnaky
+            # krok; beriem ten najcastejsi, aby jednorazova odchylka na konci
+            # zaznamu vysledok neposunula.
+            vah = {}
+            for pocet, delta in tr.stts:
+                if delta > 0:
+                    vah[delta] = vah.get(delta, 0) + pocet
+            if not vah:
+                continue
+            delta = max(vah, key=vah.get)
+            fps = tr.timescale / delta
+            if 1.0 <= fps <= 1000.0:
+                return fps
+        return None
+    finally:
+        mm.close()
+        f.close()
+
+
+def zaokruhli_fps(fps: float | None) -> int | None:
+    """Prevedie nameranu frekvenciu na bezne pouzivane cele cislo.
+
+    Kamery casto zapisuju 29.97 alebo 59.94 (NTSC); na prehravanie vyrezaneho
+    streamu sa hodi cele cislo, ktore je k tomu najblizsie.
+    """
+    if not fps:
+        return None
+    for bezna in (24, 25, 30, 48, 50, 60, 100, 120, 200, 240):
+        if abs(fps - bezna) <= 0.2:
+            return bezna
+    return int(round(fps)) or None
+
+
 def avcc_parameter_sets(path: str) -> bytes:
     """Vytiahne SPS/PPS z boxu `avcC` v zdravom MP4/MOV subore.
 
