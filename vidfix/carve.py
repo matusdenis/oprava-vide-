@@ -266,6 +266,9 @@ def walk_stats(mm, start: int, end: int, hevc: bool = False, max_nals: int = 120
 
 # Dve kola hladania: najprv prisne (bezne videa), potom volnejsie pre
 # vysokobitratove zaznamy (4K), kde ma jeden snimok aj niekolko MB.
+# Ako ďaleko za koncom zašifrovanej časti sa ešte hľadá prednostne
+BLIZKE_OKNO = 8 << 20
+
 SCAN_PASSES = (
     {"max_len": 256 << 10, "min_nals": 20, "min_coverage": 0.90, "popis": "prísne"},
     {"max_len": 4 << 20, "min_nals": 8, "min_coverage": 0.90, "popis": "voľnejšie (vysoký dátový tok)"},
@@ -314,26 +317,41 @@ def find_nal_stream(mm, size: int, hint: int = 0, hevc: bool | None = None,
     zhovievavejšia, takže by na náhodnej zhode zvíťazila aj v súbore H.264.
     """
     end = size if limit is None else min(size, limit)
-    if hevc is not None:
-        return _hladaj_pre_kodek(mm, size, hint, bool(hevc), min_len, log, end,
-                                 max_candidates)
-    vysledky = []
-    for je_hevc in (False, True):
-        r = _hladaj_pre_kodek(mm, size, hint, je_hevc, min_len, log, end, max_candidates)
-        if r:
-            vysledky.append(r)
-            if log:
-                st = r["statistika"]
-                log(f"  {'H.265' if je_hevc else 'H.264'}: nález na offsete "
-                    f"{r['offset']} ({st['nals']} NAL jednotiek, pokrytie "
-                    f"{st['coverage'] * 100:.1f} %)")
-    if not vysledky:
-        return None
-    najlepsi = max(vysledky, key=lambda r: (round(r["skore"]), -r["offset"]))
-    if log:
-        log(f"  začiatok obrazového streamu na offsete {najlepsi['offset']} — kodek "
-            f"{'H.265/HEVC' if najlepsi['hevc'] else 'H.264'}")
-    return najlepsi
+    # Skutočný začiatok streamu leží tesne za koncom zašifrovanej časti — prvá
+    # neporušená vzorka nasleduje hneď za ňou. Preto sa najprv hľadá len v
+    # blízkom okolí hranice: ďalej v súbore už bývajú len náhodné zhody, ktoré
+    # by pri porovnávaní mohli vyhrať nad tou správnou.
+    okna = []
+    if hint and hint + BLIZKE_OKNO < end:
+        okna.append(min(end, hint + BLIZKE_OKNO))
+    okna.append(end)
+
+    for kraj in okna:
+        if hevc is not None:
+            r = _hladaj_pre_kodek(mm, size, hint, bool(hevc), min_len, log, kraj,
+                                  max_candidates)
+            if r:
+                return r
+            continue
+        vysledky = []
+        for je_hevc in (False, True):
+            r = _hladaj_pre_kodek(mm, size, hint, je_hevc, min_len, log, kraj,
+                                  max_candidates)
+            if r:
+                vysledky.append(r)
+                if log:
+                    st = r["statistika"]
+                    log(f"  {'H.265' if je_hevc else 'H.264'}: nález na offsete "
+                        f"{r['offset']} — {st['nals']} NAL jednotiek, pokrytie "
+                        f"{st['coverage'] * 100:.1f} %")
+        if not vysledky:
+            continue
+        najlepsi = max(vysledky, key=lambda r: (round(r["skore"]), -r["offset"]))
+        if log:
+            log(f"  začiatok obrazového streamu na offsete {najlepsi['offset']} "
+                f"— kodek {'H.265/HEVC' if najlepsi['hevc'] else 'H.264'}")
+        return najlepsi
+    return None
 
 
 def find_nal_stream_start(mm, size: int, **kw) -> int | None:
@@ -612,6 +630,214 @@ def find_nal_in_annexb(data: bytes, nal_type: int, hevc: bool = False) -> bytes 
         if nxt < 0:
             return None
         pos = nxt
+
+
+class _BitCopier:
+    """Cita bity zo zdroja a sucasne ich prepisuje do vystupu.
+
+    Umoznuje zmenit jedno pole uprostred bitoveho toku a vsetko ostatne
+    ponechat presne tak, ako bolo - vratane poli, ktorym nerozumieme.
+    """
+
+    def __init__(self, data: bytes):
+        self.data = data
+        self.pos = 0
+        self.out = []
+
+    # --- citanie ---
+    def _bit(self) -> int:
+        byte = self.pos >> 3
+        if byte >= len(self.data):
+            raise EOFError
+        b = (self.data[byte] >> (7 - (self.pos & 7))) & 1
+        self.pos += 1
+        return b
+
+    def read_bits(self, n: int) -> int:
+        v = 0
+        for _ in range(n):
+            v = (v << 1) | self._bit()
+        return v
+
+    def read_ue(self) -> int:
+        zeros = 0
+        while self._bit() == 0:
+            zeros += 1
+            if zeros > 32:
+                raise ValueError("neplatny exp-Golomb kod")
+        if zeros == 0:
+            return 0
+        return (1 << zeros) - 1 + self.read_bits(zeros)
+
+    # --- zapis ---
+    def write_bits(self, value: int, n: int):
+        for i in range(n - 1, -1, -1):
+            self.out.append((value >> i) & 1)
+
+    def write_ue(self, value: int):
+        value += 1
+        n = value.bit_length()
+        self.write_bits(0, n - 1)
+        self.write_bits(value, n)
+
+    # --- kopirovanie ---
+    def copy_bits(self, n: int) -> int:
+        v = self.read_bits(n)
+        self.write_bits(v, n)
+        return v
+
+    def copy_ue(self) -> int:
+        v = self.read_ue()
+        self.write_ue(v)
+        return v
+
+    def copy_se(self) -> int:
+        v = self.read_ue()
+        self.write_ue(v)
+        return v
+
+    def copy_rest(self):
+        while self.pos < len(self.data) * 8:
+            self.out.append(self._bit())
+
+    def bytes(self) -> bytes:
+        bits = list(self.out)
+        while len(bits) % 8:
+            bits.append(0)
+        out = bytearray()
+        for i in range(0, len(bits), 8):
+            b = 0
+            for x in bits[i:i + 8]:
+                b = (b << 1) | x
+            out.append(b)
+        return bytes(out)
+
+
+def _escape(data: bytes) -> bytes:
+    """Vlozi ochranne bajty, aby v tele NAL jednotky nevznikol start kod."""
+    out = bytearray()
+    zeros = 0
+    for b in data:
+        if zeros >= 2 and b <= 3:
+            out.append(3)
+            zeros = 0
+        out.append(b)
+        zeros = zeros + 1 if b == 0 else 0
+    return bytes(out)
+
+
+def patch_sps_rozlisenie(nal: bytes, sirka: int, vyska: int,
+                         hevc: bool = False) -> bytes | None:
+    """Zmeni v hotovom SPS rozlisenie a vsetko ostatne nechá nedotknuté.
+
+    Na to je to cele: ked ma pouzivatel zdravy subor z tej istej kamery, ale
+    nakruteny v inom rozliseni, su v nom spravne vsetky nastavenia kodeka -
+    profil, sposob kodovania, pocet referencnych snimkov. Nesedi jedine
+    rozlisenie, a to je jedine pole, ktore treba prepisat.
+    """
+    try:
+        if hevc:
+            if len(nal) < 12 or ((nal[0] >> 1) & 0x3F) != 33:
+                return None
+            hlavicka, telo = nal[:2], _unescape(nal[2:])
+            c = _BitCopier(telo)
+            c.copy_bits(4)                      # sps_video_parameter_set_id
+            max_sub = c.copy_bits(3)
+            c.copy_bits(1)                      # sps_temporal_id_nesting_flag
+            c.copy_bits(2 + 1 + 5)              # profile_space, tier, profile_idc
+            c.copy_bits(32)
+            c.copy_bits(32)
+            c.copy_bits(16)                     # spolu 48 bitov obmedzeni
+            c.copy_bits(8)                      # general_level_idc
+            pod = [(c.copy_bits(1), c.copy_bits(1)) for _ in range(max_sub)]
+            if max_sub > 0:
+                for _ in range(max_sub, 8):
+                    c.copy_bits(2)
+            for profil, uroven in pod:
+                if profil:
+                    c.copy_bits(88)
+                if uroven:
+                    c.copy_bits(8)
+            c.copy_ue()                         # sps_seq_parameter_set_id
+            chroma = c.copy_ue()
+            if chroma == 3:
+                c.copy_bits(1)
+            c.read_ue()                         # pôvodná šírka
+            c.read_ue()                         # pôvodná výška
+            c.write_ue(sirka)
+            c.write_ue(vyska)
+            if c.read_bits(1):                  # conformance_window_flag
+                for _ in range(4):
+                    c.read_ue()
+            c.write_bits(0, 1)                  # nové rozlíšenie je bez orezania
+            c.copy_rest()
+            return bytes(hlavicka) + _escape(c.bytes())
+
+        if len(nal) < 6 or (nal[0] & 0x1F) != 7:
+            return None
+        hlavicka, telo = nal[:1], _unescape(nal[1:])
+        c = _BitCopier(telo)
+        profile_idc = c.copy_bits(8)
+        c.copy_bits(8)                          # constraint flags
+        c.copy_bits(8)                          # level_idc
+        c.copy_ue()                             # seq_parameter_set_id
+        chroma = 1
+        if profile_idc in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139,
+                           134, 135):
+            chroma = c.copy_ue()
+            if chroma == 3:
+                c.copy_bits(1)
+            c.copy_ue()
+            c.copy_ue()
+            c.copy_bits(1)
+            if c.copy_bits(1):                  # seq_scaling_matrix_present_flag
+                for i in range(8 if chroma != 3 else 12):
+                    if c.copy_bits(1):
+                        posledne = dalsie = 8
+                        for _ in range(16 if i < 6 else 64):
+                            if dalsie:
+                                delta = c.copy_se()
+                                dalsie = (posledne + delta + 256) % 256
+                            posledne = dalsie or posledne
+        c.copy_ue()                             # log2_max_frame_num_minus4
+        poc = c.copy_ue()
+        if poc == 0:
+            c.copy_ue()
+        elif poc == 1:
+            c.copy_bits(1)
+            c.copy_se()
+            c.copy_se()
+            for _ in range(c.copy_ue()):
+                c.copy_se()
+        c.copy_ue()                             # max_num_ref_frames
+        c.copy_bits(1)                          # gaps_in_frame_num_allowed
+        c.read_ue()                             # pôvodná šírka v makroblokoch
+        c.read_ue()                             # pôvodná výška
+        mb_w = (sirka + 15) // 16
+        mb_h = (vyska + 15) // 16
+        c.write_ue(mb_w - 1)
+        c.write_ue(mb_h - 1)
+        frame_mbs_only = c.copy_bits(1)
+        if not frame_mbs_only:
+            c.copy_bits(1)
+        c.copy_bits(1)                          # direct_8x8_inference_flag
+        if c.read_bits(1):                      # frame_cropping_flag
+            for _ in range(4):
+                c.read_ue()
+        crop_r = (mb_w * 16 - sirka) // 2
+        crop_b = (mb_h * 16 - vyska) // 2
+        if crop_r or crop_b:
+            c.write_bits(1, 1)
+            c.write_ue(0)
+            c.write_ue(crop_r)
+            c.write_ue(0)
+            c.write_ue(crop_b)
+        else:
+            c.write_bits(0, 1)
+        c.copy_rest()
+        return bytes(hlavicka) + _escape(c.bytes())
+    except (EOFError, ValueError, IndexError):
+        return None
 
 
 def only_parameter_sets(data: bytes, hevc: bool = False) -> bytes:

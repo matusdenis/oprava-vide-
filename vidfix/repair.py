@@ -106,6 +106,51 @@ def _mozne_video(cesta: str) -> bool:
         return False
 
 
+# Rozlíšenia, ktoré sa skúšajú, keď vzorový súbor nakrútila tá istá kamera,
+# ale v inom režime. Ostatné nastavenia kodeku sú rovnaké, mení sa len rozmer.
+ROZLISENIA_NA_SKUSANIE = [
+    (3840, 2160), (1920, 1080), (2704, 1520), (1280, 720),
+    (4096, 2160), (2560, 1440), (1080, 1920), (2160, 3840),
+]
+
+
+def _varianty_rozlisenia(ctx: Ctx, ps: bytes, hevc: bool, zdroj: str,
+                         videne: set) -> list:
+    """Z hotovej hlavičky vyrobí varianty s iným rozlíšením.
+
+    Rieši presne ten prípad, keď má používateľ zdravé video z tej istej kamery,
+    ale nakrútené v inom režime: profil, spôsob kódovania aj ostatné nastavenia
+    sú rovnaké, nesedí jedine rozlíšenie — a to je jediné pole, ktoré treba
+    v hlavičke prepísať.
+    """
+    sps = (carve.find_nal_in_annexb(ps, 33, hevc=True) if hevc
+           else carve.find_sps_in_annexb(ps))
+    if not sps:
+        return []
+    povodne = carve.plausible_hevc_sps(sps) if hevc else carve.plausible_sps(sps)
+    if not povodne:
+        return []
+
+    ziadane = []
+    if ctx.options.get("sirka") and ctx.options.get("vyska"):
+        ziadane.append((int(ctx.options["sirka"]), int(ctx.options["vyska"])))
+    ziadane += [r for r in ROZLISENIA_NA_SKUSANIE
+                if r != (povodne["sirka"], povodne["vyska"])]
+
+    out = []
+    for sirka, vyska in ziadane[:9]:
+        novy = carve.patch_sps_rozlisenie(sps, sirka, vyska, hevc=hevc)
+        if not novy:
+            continue
+        upravene = ps.replace(carve.START_CODE + sps, carve.START_CODE + novy)
+        if upravene in videne:
+            continue
+        videne.add(upravene)
+        out.append({"popis": f"parametre z {zdroj} prepísané na {sirka}×{vyska}",
+                    "blob": upravene, "kandidat": None})
+    return out
+
+
 def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
     """Pozbiera parametre obrazu z ostatných videí v okolí.
 
@@ -148,6 +193,7 @@ def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
         if not ps or ps in videne:
             continue
         videne.add(ps)
+        kandidati += _varianty_rozlisenia(ctx, ps, hevc, os.path.basename(cesta), videne)
         sps = (carve.find_nal_in_annexb(ps, 33, hevc=True) if hevc
                else carve.find_sps_in_annexb(ps))
         info = ((carve.plausible_hevc_sps(sps) if hevc else carve.plausible_sps(sps))

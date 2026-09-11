@@ -77,6 +77,21 @@ class TestParametreH264(unittest.TestCase):
         pps = h264_params.build_pps()
         self.assertEqual(pps[0] & 0x1F, 8)
 
+    def test_prepis_rozlisenia_zachova_ostatne_nastavenia(self):
+        # zdravý súbor z tej istej kamery, ale iné rozlíšenie: všetko ostatné
+        # v hlavičke musí ostať nedotknuté
+        for prof in (66, 77, 100):
+            sps = h264_params.build_sps(1920, 1080, profile_idc=prof,
+                                        log2_max_frame_num_minus4=2,
+                                        max_num_ref_frames=3)
+            povodne = carve.plausible_sps(sps)
+            novy = carve.patch_sps_rozlisenie(sps, 1280, 720)
+            self.assertIsNotNone(novy, f"prepis zlyhal pre profil {prof}")
+            upravene = carve.plausible_sps(novy)
+            self.assertEqual((upravene["sirka"], upravene["vyska"]), (1280, 720))
+            self.assertEqual(upravene["profile_idc"], povodne["profile_idc"])
+            self.assertEqual(upravene["level_idc"], povodne["level_idc"])
+
     def test_nezmysel_nie_je_sps(self):
         self.assertIsNone(carve.plausible_sps(b"\x67\x27\x00\x60\xac\x11"))
 
@@ -325,6 +340,17 @@ class TestH265(ZakladVzorky):
     def setUp(self):
         self.poskodeny = posifruj_zaciatok(self.zdroj_h265,
                                            self.out("h265_poskodene.mp4"), 256 * 1024)
+
+    def test_prepis_rozlisenia_h265(self):
+        ps = mp4.codec_parameter_sets(self.zdroj_h265)
+        sps = carve.find_nal_in_annexb(ps, 33, hevc=True)
+        povodne = carve.plausible_hevc_sps(sps)
+        novy = carve.patch_sps_rozlisenie(sps, 3840, 2160, hevc=True)
+        self.assertIsNotNone(novy)
+        upravene = carve.plausible_hevc_sps(novy)
+        self.assertEqual((upravene["sirka"], upravene["vyska"]), (3840, 2160))
+        self.assertEqual(upravene["profile_idc"], povodne["profile_idc"])
+        self.assertEqual(upravene["level_idc"], povodne["level_idc"])
 
     def test_sps_h265_sa_da_rozparsovat(self):
         ps = mp4.codec_parameter_sets(self.zdroj_h265)
