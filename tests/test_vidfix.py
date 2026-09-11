@@ -661,6 +661,24 @@ class TestKotvySnimkov(unittest.TestCase):
             mm.close()
             f.close()
 
+    def test_klucovy_snimok_sa_rozpozna(self):
+        """Vyrezávanie musí začať kľúčovým snímkom, nie hocijakým."""
+        def jednotka(typ, dlzka=3000):
+            telo = bytes([typ]) + b"\x88" * dlzka
+            return (b"\x00\x00\x00\x02\x09\x10"
+                    + len(telo).to_bytes(4, "big") + telo)
+
+        medzi = jednotka(0x65)      # IDR (typ 5)
+        bezny = jednotka(0x41)      # bežný rez (typ 1)
+        f, mm, size = self._mm(bezny + medzi + bezny)
+        try:
+            self.assertFalse(carve.je_klucovy(mm, size, 0, False))
+            self.assertTrue(carve.je_klucovy(mm, size, len(bezny), False))
+            self.assertFalse(carve.je_klucovy(mm, size, len(bezny) * 2, False))
+        finally:
+            mm.close()
+            f.close()
+
     def test_v_nahodnych_datach_ziadne_kotvy(self):
         f, mm, size = self._mm(os.urandom(8 << 20))
         try:

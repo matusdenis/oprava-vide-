@@ -434,6 +434,94 @@ def naozaj_video(mm, size: int, kandidat: dict) -> bool:
     return st["nals"] >= MIN_NALS_OVERENIE
 
 
+# Klucove snimky: H.264 typ 5 (IDR), H.265 typy 16-21 (IRAP)
+def je_klucovy(mm, size: int, offset: int, hevc: bool,
+               koniec: int | None = None, max_nals: int = 16) -> bool:
+    """Obsahuje pristupova jednotka na tejto pozicii klucovy snimok?
+
+    Vyrezavanie musi zacat prave nim. Snimky pred prvym klucovym sa odvolavaju
+    na obrazky, ktore ransomver znicil - dekoder z nich poskladá rozsypaný
+    obraz alebo nic.
+    """
+    pos = offset
+    limit = min(size, koniec if koniec else offset + (32 << 20))
+    for _ in range(max_nals):
+        if pos >= limit:
+            break
+        n = nal_here(mm, pos, size, hevc, min_len=1, max_len=16 << 20,
+                     strict_type=False)
+        if n is None:
+            return False
+        t = ((mm[pos + 4] >> 1) & 0x3F) if hevc else (mm[pos + 4] & 0x1F)
+        if (16 <= t <= 21) if hevc else (t == 5):
+            return True
+        # Za prvym rezom uz klucovy snimok nepride - pristupova jednotka sa
+        # skoncila.
+        if (t in (0, 1)) if hevc else (t == 1):
+            return False
+        pos += 4 + n
+    return False
+
+
+def overene_kotvy(mm, size: int, offsety, hevc: bool, pocet: int = 24) -> list:
+    """Z najdenych pozicii necha len tie, z ktorych naozaj vychadza stream."""
+    out = []
+    for idx in offsety:
+        st = walk_stats(mm, idx, size, hevc, max_len=4 << 20)
+        if st["nals"] < MIN_NALS_KOTVA or st["coverage"] < MIN_POKRYTIE_KOTVA:
+            continue
+        out.append({"offset": idx, "hevc": hevc, "max_len": 4 << 20,
+                    "statistika": st, "kolo": "oddeľovač snímku", "kotva": True})
+        if len(out) >= pocet:
+            break
+    return out
+
+
+def najdi_kotvy(mm, size: int, hint: int = 0, pocet: int = 24,
+                hevc: bool | None = None, log=None) -> list:
+    """Najde zaciatky snimkov podla riadiacich jednotiek kamery.
+
+    Vracia zoznam kandidatov v poradi od zaciatku suboru. Kazdy sa este overi
+    prechadzkou, aby sa vylucila nahodna zhoda aj teoreticky.
+    """
+    najdene = []
+    for je_hevc in ((False, True) if hevc is None else (bool(hevc),)):
+        najdene += overene_kotvy(mm, size,
+                                 kotvy_offsety(mm, size, hint, je_hevc),
+                                 je_hevc, pocet)
+    videne = set()
+    out = []
+    for k in sorted(najdene, key=lambda k: k["offset"]):
+        if k["offset"] in videne:
+            continue
+        videne.add(k["offset"])
+        out.append(k)
+    if log and out:
+        log(f"  podľa oddeľovačov snímkov nájdených {len(out)} možných "
+            f"začiatkov (prvý na offsete {out[0]['offset']})")
+    return out[:pocet]
+
+
+# Hlbka overovacej prechadzky a kolko NAL jednotiek musi vydrzat. Skutocne
+# video ich da stovky (namerane 132-400), nahodne data sa zaseknu na osmich -
+# medzi tym je siroka medzera, takze hranica nie je citliva na presne cislo.
+HLBKA_OVERENIA = 400
+MIN_NALS_OVERENIE = 40
+
+
+def naozaj_video(mm, size: int, kandidat: dict) -> bool:
+    """Overi najdeny zaciatok hlbsou prechadzkou.
+
+    Kratka prechadzka sa v nahodnych (zasifrovanych) datach obcas podari -
+    zastavi sa vsak hned, ako splni minimum. Skutocne video pokracuje dalej
+    a dalej, takze staci ist hlbsie a rozdiel je okamzite vidiet.
+    """
+    st = walk_stats(mm, kandidat["offset"], size, kandidat["hevc"],
+                    max_nals=HLBKA_OVERENIA, budget=32 << 20,
+                    max_len=kandidat["max_len"])
+    return st["nals"] >= MIN_NALS_OVERENIE
+
+
 def najdi_kotvy(mm, size: int, hint: int = 0, pocet: int = 24,
                 hevc: bool | None = None, log=None) -> list:
     """Najde zaciatky snimkov podla riadiacich jednotiek kamery.
@@ -473,7 +561,8 @@ def najdi_kotvy(mm, size: int, hint: int = 0, pocet: int = 24,
 
 
 def najdi_kandidatov(mm, size: int, hint: int = 0, pocet: int = 48,
-                     min_len: int = 256, log=None) -> list:
+                     min_len: int = 256, log=None,
+                     rozpocet: int = 512 << 20) -> list:
     """Vrati viac moznych zaciatkov streamu, nie len prvy.
 
     V zasifrovanej casti sa nahodou najdu miesta, ktore prejdu aj prisnou
@@ -486,8 +575,11 @@ def najdi_kandidatov(mm, size: int, hint: int = 0, pocet: int = 48,
         for je_hevc in (False, True):
             pos = max(0, hint)
             najdene = 0
-            while pos < size and najdene < pocet:
-                idx = mm.find(b"\x00", pos, size)
+            # Hlada sa bajt po bajte, takze na velkom subore to trva. Rozpocet
+            # zaruci, ze sa davka na jednom subore nezasekne na hodiny.
+            koniec = min(size, max(0, hint) + rozpocet)
+            while pos < koniec and najdene < pocet:
+                idx = mm.find(b"\x00", pos, koniec)
                 if idx < 0:
                     break
                 if nal_here(mm, idx, size, je_hevc, min_len=min_len,
