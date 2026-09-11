@@ -18,6 +18,7 @@ from vidfix.analyze import (analyze, rychly_verdikt,             # noqa: E402
                             _je_v_tele_video)
 from vidfix.headerdb import HeaderDB                             # noqa: E402
 from vidfix.repair import (Ctx, najdi_medzikroky, najdi_videa,   # noqa: E402
+                           over_vystup,
                            spusti, spusti_davku)
 from vidfix.tools import Toolbox                                 # noqa: E402
 from vidfix.util import entropy, human                           # noqa: E402
@@ -427,6 +428,51 @@ class TestVysokyDatovyTok(ZakladVzorky):
                                 "štruktúrna kontrola mala súbor zachrániť")
         finally:
             carve.PRAH_CHI2 = povodny
+
+
+class TestVystupnyPriecinok(unittest.TestCase):
+    """Disk pripojený len na čítanie sa musí ohlásiť hneď, nie 339-krát."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="vidfix-vystup-")
+
+    def tearDown(self):
+        os.chmod(self.dir, 0o755)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_zapisovatelny_priecinok_prejde(self):
+        over_vystup(os.path.join(self.dir, "opravene"))
+        self.assertTrue(os.path.isdir(os.path.join(self.dir, "opravene")))
+
+    @unittest.skipIf(os.geteuid() == 0, "root zapíše aj do chráneného priečinka")
+    def test_chraneny_priecinok_sa_ohlasi(self):
+        chraneny = os.path.join(self.dir, "bez_prav")
+        os.makedirs(chraneny)
+        os.chmod(chraneny, 0o500)
+        with self.assertRaises(RuntimeError) as ctx:
+            over_vystup(chraneny)
+        self.assertIn("nedá zapisovať", str(ctx.exception))
+
+    def test_malo_miesta_sa_ohlasi(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            over_vystup(self.dir, potrebne=1 << 60)
+        self.assertIn("voľných", str(ctx.exception))
+
+    def test_davka_sa_nespusti_ked_sa_neda_zapisovat(self):
+        """Dávka musí spadnúť pred prvým súborom, nie po každom zvlášť."""
+        volane = []
+
+        def log(m):
+            volane.append(m)
+
+        # priečinok sa nedá vytvoriť: v ceste je obyčajný súbor
+        prekazka = os.path.join(self.dir, "toto_je_subor")
+        with open(prekazka, "wb") as f:
+            f.write(b"x")
+        with self.assertRaises(RuntimeError):
+            spusti_davku(["/neexistuje/a.mov"], os.path.join(prekazka, "von"),
+                         Toolbox(), HeaderDB(), {}, log)
+        self.assertEqual(volane, [], "dávka nesmie začať spracovávať súbory")
 
 
 class TestKotvySnimkov(unittest.TestCase):

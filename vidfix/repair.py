@@ -8,6 +8,7 @@ Ziadna strategia NIKDY nezapisuje do povodneho suboru - vsetko ide do noveho.
 """
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 
@@ -858,6 +859,60 @@ def najdi_videa(priecinok: str, vynechaj: set | None = None,
     return out[:max_suborov]
 
 
+def over_vystup(outdir: str, potrebne: int = 0) -> None:
+    """Overi, ze sa do vystupneho priecinka da naozaj zapisovat.
+
+    Disky formatovane pre Windows (NTFS) pripaja macOS len na citanie a
+    externy disk sa vie prepnut do rezimu len na citanie aj sam, ked na nom
+    zacnu chyby. Bez tejto kontroly by dávka prebehla cez stovky suborov a
+    pri kazdom zopakovala tu istu chybu.
+
+    Vyhodi `RuntimeError` s vysvetlenim, co s tym.
+    """
+    try:
+        os.makedirs(outdir, exist_ok=True)
+    except (OSError, ValueError) as exc:
+        dovod = getattr(exc, "strerror", None) or str(exc)
+        raise RuntimeError(
+            f"Do priečinka „{outdir}“ sa nedá zapisovať ({dovod}). "
+            f"Vyber výstupný priečinok na disku, na ktorý sa dá zapisovať — "
+            f"napríklad na internom disku počítača.") from exc
+
+    skuska = os.path.join(outdir, ".vidfix_skuska")
+    try:
+        with open(skuska, "wb") as f:
+            f.write(b"x")
+        os.remove(skuska)
+    except OSError as exc:
+        if exc.errno == errno.EROFS:
+            dovod = ("disk je pripojený len na čítanie. Býva to pri diskoch "
+                     "formátovaných pre Windows (NTFS), ktoré macOS zapisovať "
+                     "nevie, alebo keď sa disk kvôli chybám sám prepol do "
+                     "režimu len na čítanie")
+        elif exc.errno in (errno.EACCES, errno.EPERM):
+            dovod = "priečinok je chránený a program doň nemá prístup"
+        elif exc.errno == errno.ENOSPC:
+            dovod = "na disku už nie je voľné miesto"
+        else:
+            dovod = exc.strerror or "zápis zlyhal"
+        raise RuntimeError(
+            f"Do priečinka „{outdir}“ sa nedá zapisovať: {dovod}. "
+            f"Zvoľ výstupný priečinok na inom disku — zachránené videá musia "
+            f"mať kam ísť. Pôvodné poškodené súbory sa nikdy neprepisujú, "
+            f"takže disk s nimi stačí mať pripojený len na čítanie.") from exc
+
+    if potrebne:
+        try:
+            volne = shutil.disk_usage(outdir).free
+        except OSError:
+            return
+        if volne < potrebne:
+            raise RuntimeError(
+                f"Na výstupnom disku je {human(volne)} voľných, ale zachránené "
+                f"videá zaberú približne {human(potrebne)}. Uvoľni miesto "
+                f"alebo vyber priestrannejší disk.")
+
+
 def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
                  strategia: str | None = None, preruseny=None) -> dict:
     """Opravi cely zoznam suborov rovnakym postupom ako ten prvy.
@@ -867,6 +922,16 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
     (treba vyrezavat). Nastavenia - vzorovy subor, rozlisenie, snimkova
     frekvencia - sa preberaju z prveho, uspesneho behu.
     """
+    # Zapisovatelnost sa overi raz na zaciatku. Bez toho by sa tá istá chyba
+    # zopakovala pri kazdom z niekolko sto suborov.
+    potrebne = 0
+    for cesta in subory:
+        try:
+            potrebne += os.path.getsize(cesta)
+        except OSError:
+            continue
+    over_vystup(outdir, potrebne)
+
     vysledky = []
     hotove = zlyhane = preskocene = 0
     for i, cesta in enumerate(subory, 1):

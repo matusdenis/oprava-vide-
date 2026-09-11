@@ -23,7 +23,8 @@ from vidfix.analyze import (analyze, prehlad_priecinka,      # noqa: E402
                             rozbor)
 from vidfix.headerdb import HeaderDB                # noqa: E402
 from vidfix.repair import (Ctx, STRATEGIE, najdi_medzikroky,  # noqa: E402
-                           najdi_videa, spusti, spusti_davku)
+                           najdi_videa, over_vystup, spusti,
+                           spusti_davku)
 from vidfix.tools import Toolbox                    # noqa: E402
 from vidfix.util import human, najdi_cestu          # noqa: E402
 
@@ -110,6 +111,11 @@ def prikaz_oprav(args) -> int:
     volby = {"sirka": args.sirka, "vyska": args.vyska, "fps": args.fps,
              "vzor": args.vzor, "verzie": args.verzie.replace("-", "_"),
              "rychle_hladanie": not args.dokladne}
+    try:
+        over_vystup(vystup)
+    except RuntimeError as exc:
+        print(f"\n{exc}", file=sys.stderr)
+        return 2
     ctx = Ctx(args.subor, vystup, tb, db, volby, log=lambda m: print(m, flush=True))
     vysledok = spusti(strategia, ctx)
     print("\n" + "=" * 66)
@@ -140,8 +146,13 @@ def prikaz_davka(args) -> int:
     volby = {"sirka": args.sirka, "vyska": args.vyska, "fps": args.fps,
              "vzor": args.vzor, "verzie": args.verzie.replace("-", "_"),
              "rychle_hladanie": not args.dokladne}
-    v = spusti_davku(subory, vystup, tb, db, volby,
-                     log=lambda m: print(m, flush=True), strategia=args.strategia)
+    try:
+        v = spusti_davku(subory, vystup, tb, db, volby,
+                         log=lambda m: print(m, flush=True),
+                         strategia=args.strategia)
+    except RuntimeError as exc:
+        print(f"\n{exc}", file=sys.stderr)
+        return 2
     print("\n" + "=" * 66)
     for r in v["vysledky"]:
         znak = "OK   " if r["ok"] else "CHYBA"
