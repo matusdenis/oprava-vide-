@@ -19,6 +19,22 @@ from .util import human, safe_name
 COPY_CHUNK = 8 << 20
 
 
+VNUTORNE_PRIPONY = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".3gp",
+                    ".mts", ".m2ts", ".ts")
+
+
+def _zaklad_nazvu(cesta: str) -> tuple:
+    """Z nazvu suboru vyberie zaklad a povodnu priponu.
+
+    "dovolenka.mp4.locked" -> ("dovolenka", ".mp4")
+    """
+    base, orig_ext = os.path.splitext(os.path.basename(cesta))
+    base2, inner = os.path.splitext(base)
+    if inner.lower() in VNUTORNE_PRIPONY:
+        return base2, inner
+    return base, orig_ext
+
+
 class Ctx:
     def __init__(self, path: str, outdir: str, toolbox, db, options: dict | None = None,
                  log=None):
@@ -34,12 +50,7 @@ class Ctx:
         self._log(msg)
 
     def out(self, suffix: str, ext: str | None = None) -> str:
-        base, orig_ext = os.path.splitext(os.path.basename(self.path))
-        # "video.mp4.locked" -> "video.mp4" -> "video"
-        base2, inner = os.path.splitext(base)
-        if inner.lower() in (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".3gp", ".mts", ".m2ts", ".ts"):
-            base = base2
-            orig_ext = inner
+        base, orig_ext = _zaklad_nazvu(self.path)
         ext = ext or (orig_ext if orig_ext.lower() in (".mp4", ".mov", ".ts") else ".mp4")
         return os.path.join(self.outdir, safe_name(f"{base}_{suffix}{ext}"))
 
@@ -957,6 +968,37 @@ def over_vystup(outdir: str, potrebne: int = 0) -> None:
                 f"alebo vyber priestrannejší disk.")
 
 
+def hotovy_vystup(cesta: str, outdir: str, min_velkost: int = 64 << 10) -> str | None:
+    """Vrati uz hotovy vysledok pre dany zdrojovy subor, ak existuje.
+
+    Davka cez stovky velkych videi bezi hodiny a da sa prerusit - uspanim
+    pocitaca, odpojenim disku, zavretim terminalu. Pri opatovnom spusteni nema
+    zmysel robit znova to, co uz hotove je.
+
+    Medzikroky (`_vyrezany`, `_obraz`) sa za vysledok nepovazuju - tie zostavaju
+    aj po neuspesnom behu.
+    """
+    base, _ext = _zaklad_nazvu(cesta)
+    predpona = safe_name(f"{base}_")
+    try:
+        with os.scandir(outdir) as it:
+            for e in it:
+                if not e.name.startswith(predpona):
+                    continue
+                if not e.name.lower().endswith((".mp4", ".mov", ".ts")):
+                    continue
+                if any(z in e.name for z in ("_vyrezany", "_obraz")):
+                    continue
+                try:
+                    if e.is_file() and e.stat().st_size >= min_velkost:
+                        return e.path
+                except OSError:
+                    continue
+    except OSError:
+        return None
+    return None
+
+
 def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
                  strategia: str | None = None, preruseny=None) -> dict:
     """Opravi cely zoznam suborov rovnakym postupom ako ten prvy.
@@ -977,7 +1019,7 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
     over_vystup(outdir, potrebne)
 
     vysledky = []
-    hotove = zlyhane = preskocene = 0
+    hotove = zlyhane = preskocene = uz_hotove = 0
     for i, cesta in enumerate(subory, 1):
         if preruseny and preruseny():
             log("Dávka prerušená používateľom.")
@@ -985,6 +1027,17 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
         nazov = os.path.basename(cesta)
         log("")
         log(f"───── [{i}/{len(subory)}] {nazov} " + "─" * max(0, 40 - len(nazov)))
+        if not volby.get("prerobit_hotove"):
+            hotovy = hotovy_vystup(cesta, outdir)
+            if hotovy:
+                log(f"— hotové už z minula: {os.path.basename(hotovy)}")
+                vysledky.append({"subor": nazov, "cesta": cesta, "ok": True,
+                                 "uz_hotove": True,
+                                 "zhrnutie": "výsledok už existoval",
+                                 "vystupy": [{"cesta": hotovy,
+                                              "popis": "Zachránené video (z minulého behu)"}]})
+                uz_hotove += 1
+                continue
         try:
             rep = analyze(cesta, db, toolbox)
             zvolena = strategia
@@ -1020,10 +1073,13 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
     log("")
     log("=" * 56)
     log(f"Hotovo: {hotove} z {len(subory)} súborov opravených, {zlyhane} zlyhalo"
+        + (f", {uz_hotove} bolo hotových už z minula" if uz_hotove else "")
         + (f", {preskocene} preskočených (nedajú sa opraviť)." if preskocene else "."))
-    return {"ok": hotove > 0, "pocet": len(subory), "hotove": hotove,
-            "zlyhane": zlyhane, "preskocene": preskocene, "vysledky": vysledky,
+    return {"ok": (hotove + uz_hotove) > 0, "pocet": len(subory), "hotove": hotove,
+            "zlyhane": zlyhane, "preskocene": preskocene, "uz_hotove": uz_hotove,
+            "vysledky": vysledky,
             "zhrnutie": f"Opravených {hotove} z {len(subory)} súborov."
+                        + (f" {uz_hotove} bolo hotových už z minula." if uz_hotove else "")
                         + (f" {preskocene} sa opraviť nedá." if preskocene else "")}
 
 

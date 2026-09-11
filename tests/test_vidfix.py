@@ -19,7 +19,7 @@ from vidfix.analyze import (analyze, rychly_verdikt,             # noqa: E402
                             skontroluj_vysledok, _je_v_tele_video)
 from vidfix.headerdb import HeaderDB                             # noqa: E402
 from vidfix.repair import (Ctx, najdi_medzikroky, najdi_videa,   # noqa: E402
-                           over_vystup, zisti_fps,
+                           hotovy_vystup, over_vystup, zisti_fps,
                            spusti, spusti_davku)
 from vidfix.tools import Toolbox                                 # noqa: E402
 from vidfix.util import entropy, human                           # noqa: E402
@@ -438,6 +438,62 @@ class TestVysokyDatovyTok(ZakladVzorky):
                                 "štruktúrna kontrola mala súbor zachrániť")
         finally:
             carve.PRAH_CHI2 = povodny
+
+
+@potrebuje_ffmpeg
+class TestPokracovanieDavky(ZakladVzorky):
+    """Dávka cez stovky videí beží hodiny — musí sa dať dokončiť.
+
+    Uspanie počítača, odpojenie disku či zavretie terminálu ju prerušia;
+    pri opätovnom spustení nemá zmysel robiť znova to, čo už hotové je.
+    """
+
+    def setUp(self):
+        # vlastný priečinok pre každý test — inak by výsledky jedného testu
+        # rozhodovali o tom, čo vidí ďalší
+        meno = self.id().rsplit(".", 1)[-1]
+        self.vstup = self.out(f"davka_{meno}")
+        self.vystup = self.out(f"davka_{meno}_von")
+        os.makedirs(self.vstup, exist_ok=True)
+        os.makedirs(self.vystup, exist_ok=True)
+        self.subory = [
+            posifruj_zaciatok(self.zdroj, os.path.join(self.vstup, f"v{i}.mp4"),
+                              256 * 1024)
+            for i in range(2)
+        ]
+
+    def test_hotovy_vysledok_sa_najde(self):
+        hotovy = os.path.join(self.vystup, "v0_zachraneny.mp4")
+        with open(hotovy, "wb") as f:
+            f.write(b"x" * (128 << 10))
+        self.assertEqual(hotovy_vystup(self.subory[0], self.vystup), hotovy)
+        self.assertIsNone(hotovy_vystup(self.subory[1], self.vystup))
+
+    def test_medzikrok_sa_za_vysledok_nepovazuje(self):
+        with open(os.path.join(self.vystup, "v0_vyrezany.mp4"), "wb") as f:
+            f.write(b"x" * (128 << 10))
+        self.assertIsNone(hotovy_vystup(self.subory[0], self.vystup))
+
+    def test_druhy_beh_hotove_preskoci(self):
+        prvy = spusti_davku(self.subory, self.vystup, TB, HeaderDB(), {},
+                            log=lambda m: None)
+        self.assertEqual(prvy["hotove"], 2)
+        self.assertEqual(prvy["uz_hotove"], 0)
+
+        zaznam = []
+        druhy = spusti_davku(self.subory, self.vystup, TB, HeaderDB(), {},
+                             log=zaznam.append)
+        self.assertEqual(druhy["uz_hotove"], 2, "\n".join(zaznam))
+        self.assertEqual(druhy["hotove"], 0)
+        self.assertTrue(druhy["ok"])
+
+    def test_volba_prerobit_hotove(self):
+        spusti_davku(self.subory, self.vystup, TB, HeaderDB(), {},
+                     log=lambda m: None)
+        znova = spusti_davku(self.subory, self.vystup, TB, HeaderDB(),
+                             {"prerobit_hotove": True}, log=lambda m: None)
+        self.assertEqual(znova["uz_hotove"], 0)
+        self.assertEqual(znova["hotove"], 2)
 
 
 @potrebuje_ffmpeg

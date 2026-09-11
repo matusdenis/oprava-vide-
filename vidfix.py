@@ -145,7 +145,8 @@ def prikaz_davka(args) -> int:
     vystup = args.vystup or os.path.join(os.path.abspath(args.priecinok), "opravene")
     volby = {"sirka": args.sirka, "vyska": args.vyska, "fps": args.fps,
              "vzor": args.vzor, "verzie": args.verzie.replace("-", "_"),
-             "rychle_hladanie": not args.dokladne}
+             "rychle_hladanie": not args.dokladne,
+             "prerobit_hotove": args.prerobit_hotove}
     try:
         v = spusti_davku(subory, vystup, tb, db, volby,
                          log=lambda m: print(m, flush=True),
@@ -155,7 +156,7 @@ def prikaz_davka(args) -> int:
         return 2
     print("\n" + "=" * 66)
     for r in v["vysledky"]:
-        znak = "OK   " if r["ok"] else "CHYBA"
+        znak = ("HOTOVÉ" if r.get("uz_hotove") else "OK   ") if r["ok"] else "CHYBA"
         print(f"  {znak} {r['subor']:36s} {r.get('strategia', '') or r.get('chyba', '')}")
     print(v["zhrnutie"])
     return 0 if v["ok"] else 1
@@ -318,6 +319,10 @@ def main(argv=None) -> int:
     pd.add_argument("--vyska", type=int)
     pd.add_argument("--fps", type=int, default=None,
                     help="snímková frekvencia; bez nej sa zistí z indexu videa")
+    pd.add_argument("--prerobit-hotove", action="store_true",
+                    help="opravit aj subory, ktore uz vo vystupe hotove su "
+                         "(bez toho sa preskocia, takze sa dávka da kedykolvek "
+                         "dokoncit)")
     pd.add_argument("--vzor", help="iné video z tej istej kamery (aj poškodené)")
     pd.add_argument("--verzie", default="obidve",
                     choices=["obidve", "len-orezany", "len-opraveny"])
