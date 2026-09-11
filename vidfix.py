@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from vidfix import __version__                      # noqa: E402
 from vidfix.analyze import (analyze, prehlad_priecinka,      # noqa: E402
-                            rozbor)
+                            rozbor, skontroluj_vysledok)
 from vidfix.headerdb import HeaderDB                # noqa: E402
 from vidfix.repair import (Ctx, STRATEGIE, najdi_medzikroky,  # noqa: E402
                            najdi_videa, over_vystup, spusti,
@@ -195,6 +195,47 @@ def prikaz_rozbor(args) -> int:
     return 0
 
 
+def prikaz_kontrola(args) -> int:
+    """Zmeria hotové video: beží plynule, alebo v ňom chýbajú snímky?"""
+    tb = Toolbox()
+    if not tb.path("ffmpeg"):
+        print("Na kontrolu je potrebný ffmpeg.", file=sys.stderr)
+        return 2
+    zle = 0
+    for zadane in args.subor:
+        cesta = _over_cestu(zadane)
+        if not cesta:
+            zle += 1
+            continue
+        print("\n" + "=" * 66)
+        print(os.path.basename(cesta))
+        v = skontroluj_vysledok(cesta, tb)
+        if not v.get("ok"):
+            print(f"  CHYBA: {v.get('chyba')}")
+            zle += 1
+            continue
+        if v.get("stopa"):
+            print(f"  {v['stopa'].strip()}")
+        print(f"  snímkov: {v['snimky']}   trvanie: {v['trvanie']} s   "
+              f"frekvencia: {v['fps']}/s")
+        print(f"  chyby dekódovania: {v['chyby_dekodovania']}")
+        if v["plynule"]:
+            print("  PLYNULÉ — rozostupy medzi snímkami sú všade rovnaké.")
+            if v.get("koniec_mimo_poradia"):
+                print("  (posledný snímok je mimo poradia — záznam je useknutý "
+                      "uprostred skupiny snímkov; v prehrávači to vidieť nie je)")
+        else:
+            print(f"  TRHÁ SA: {v['trhnutia']} nepravidelných rozostupov, "
+                  f"chýbajúcich snímkov približne {v['chybajuce_snimky']}")
+            for t in v["kde_trha"][:10]:
+                print(f"    snímok {t['snimok']} (sekunda {t['sekunda']}): "
+                      f"rozostup {t['rozostup']} namiesto {v['bezny_rozostup']}")
+            zle += 1
+        for u in v.get("ukazky_chyb", [])[:3]:
+            print(f"    {u.strip()}")
+    return 1 if zle else 0
+
+
 def prikaz_uprac(args) -> int:
     priecinok = _over_cestu(args.priecinok, priecinok=True)
     if not priecinok:
@@ -292,6 +333,10 @@ def main(argv=None) -> int:
     pr = pod.add_parser("rozbor", help="podrobna diagnostika jedneho suboru")
     pr.add_argument("subor")
 
+    pk = pod.add_parser("kontrola",
+                        help="zmeria hotovy vysledok - plynulost a pocet snimkov")
+    pk.add_argument("subor", nargs="+")
+
     pu = pod.add_parser("uprac", help="zmaze medzisubory, ku ktorym uz je hotovy vysledok")
     pu.add_argument("priecinok")
     pu.add_argument("--naozaj", action="store_true",
@@ -310,6 +355,8 @@ def main(argv=None) -> int:
         return prikaz_prehlad(args)
     if args.prikaz == "rozbor":
         return prikaz_rozbor(args)
+    if args.prikaz == "kontrola":
+        return prikaz_kontrola(args)
     if args.prikaz == "uprac":
         return prikaz_uprac(args)
     if args.prikaz == "nastroje":

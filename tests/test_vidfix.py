@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from vidfix import carve, h264_params, mp4                       # noqa: E402
 from vidfix.analyze import (analyze, rychly_verdikt,             # noqa: E402
-                            _je_v_tele_video)
+                            skontroluj_vysledok, _je_v_tele_video)
 from vidfix.headerdb import HeaderDB                             # noqa: E402
 from vidfix.repair import (Ctx, najdi_medzikroky, najdi_videa,   # noqa: E402
                            over_vystup, zisti_fps,
@@ -441,6 +441,45 @@ class TestVysokyDatovyTok(ZakladVzorky):
 
 
 @potrebuje_ffmpeg
+class TestKontrolaVysledku(unittest.TestCase):
+    """Hotový výsledok sa musí dať zmerať — beží plynule, alebo sa trhá?"""
+
+    @classmethod
+    def setUpClass(cls):
+        if not MA_FFMPEG:
+            raise unittest.SkipTest("ffmpeg nie je k dispozicii")
+        cls.dir = tempfile.mkdtemp(prefix="vidfix-kontrola-")
+        cls.zdravy = vyrob_video(os.path.join(cls.dir, "zdrave.mp4"), sekundy=4)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def test_zdrave_video_je_plynule(self):
+        v = skontroluj_vysledok(self.zdravy, TB)
+        self.assertTrue(v["ok"])
+        self.assertTrue(v["plynule"], v.get("kde_trha"))
+        self.assertEqual(v["trhnutia"], 0)
+        self.assertAlmostEqual(v["fps"], 25, delta=0.5)
+
+    def test_vypadok_v_strede_sa_odhali(self):
+        """Keď v strede chýbajú snímky, kontrola to musí povedať."""
+        deravy = os.path.join(self.dir, "deravy.mp4")
+        r = TB.run("ffmpeg", ["-y", "-v", "error", "-i", self.zdravy,
+                              "-vf", "select='not(between(n,40,70))'",
+                              "-vsync", "0", "-an", deravy], log=None)
+        self.assertEqual(r["code"], 0, r.get("vystup"))
+        v = skontroluj_vysledok(deravy, TB)
+        self.assertTrue(v["ok"])
+        self.assertFalse(v["plynule"], "výpadok snímkov mal byť odhalený")
+        self.assertGreater(v["trhnutia"], 0)
+
+    def test_chybajuci_subor(self):
+        v = skontroluj_vysledok(os.path.join(self.dir, "niet.mp4"), TB)
+        self.assertFalse(v["ok"])
+
+
+@potrebuje_ffmpeg
 class TestSnimkovaFrekvencia(unittest.TestCase):
     """Vyrezaný stream časovanie neobsahuje — musí sa vziať z indexu.
 
@@ -587,8 +626,11 @@ class TestKotvySnimkov(unittest.TestCase):
             dst = os.path.join(self.dir, "von.h264")
             stat = carve.extract_annexb(mm, 0, size, dst, max_len=4 << 20,
                                         kotvy=kotvy)
-            # dva NAL na snímok (oddeľovač + rez), žiadny nesmie chýbať
-            self.assertEqual(stat["nals"], 24)
+            # Dva NAL na snímok (oddeľovač + rez). Posledný snímok sa zahadzuje
+            # zámerne — na konci súboru býva useknutý a v prehrávači po ňom
+            # ostane trhnutie. Ostatných jedenásť musí prejsť celých.
+            self.assertEqual(stat["nals"], 22)
+            self.assertEqual(stat["snimky"], 11)
         finally:
             mm.close()
             f.close()

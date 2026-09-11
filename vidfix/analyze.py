@@ -481,3 +481,87 @@ def rozbor(path: str, db, toolbox=None, log=print) -> dict:
     else:
         log("  Index moov neprežil, ale časť dát je pôvodná — skús vyrezanie obrazu.")
     return {"zasifrovanych_vzoriek": sifrovanych, "vzoriek": len(body)}
+
+
+# ---------------------------------------------------------------------------
+# Kontrola hotoveho vysledku
+# ---------------------------------------------------------------------------
+
+def skontroluj_vysledok(cesta: str, toolbox, max_snimkov: int = 200000) -> dict:
+    """Zmeria hotove video: plynulost, pocet snimkov, chyby dekodovania.
+
+    Vyrezany stream ziadne casovanie neobsahuje, takze sa mu priradi az pri
+    balení do MP4. Ked sedi, su rozostupy medzi snimkami vsade rovnake. Ked
+    nie, alebo ked v strede chybaju snimky, prehravac to ukaze ako sekanie -
+    a prave to sa tu da zmerat.
+    """
+    import subprocess
+    from collections import Counter
+
+    ffmpeg = toolbox.path("ffmpeg")
+    if not ffmpeg:
+        return {"ok": False, "chyba": "ffmpeg nie je k dispozícii"}
+    if not os.path.isfile(cesta):
+        return {"ok": False, "chyba": "súbor neexistuje"}
+
+    try:
+        r = subprocess.run([ffmpeg, "-v", "info", "-i", cesta,
+                            "-vf", "showinfo", "-f", "null", "-"],
+                           capture_output=True, text=True, errors="replace",
+                           timeout=3600)
+    except Exception as exc:                      # noqa: BLE001
+        return {"ok": False, "chyba": str(exc)}
+
+    vystup = r.stderr or r.stdout or ""
+    casy = []
+    for riadok in vystup.splitlines():
+        i = riadok.find("pts_time:")
+        if i < 0:
+            continue
+        kus = riadok[i + 9:].split()[0]
+        try:
+            casy.append(float(kus))
+        except ValueError:
+            continue
+        if len(casy) >= max_snimkov:
+            break
+
+    out = {"ok": True, "subor": os.path.basename(cesta), "snimky": len(casy)}
+    for riadok in vystup.splitlines():
+        if "Video:" in riadok and "Stream" in riadok:
+            out["stopa"] = riadok.strip()
+            break
+    chyby = [l for l in vystup.splitlines()
+             if "error" in l.lower() or "Invalid" in l or "corrupt" in l.lower()]
+    out["chyby_dekodovania"] = len(chyby)
+    out["ukazky_chyb"] = chyby[:5]
+
+    if len(casy) < 2:
+        out["ok"] = False
+        out["chyba"] = "z videa sa nepodarilo prečítať ani dva snímky"
+        return out
+
+    rozostupy = [round(casy[i + 1] - casy[i], 5) for i in range(len(casy) - 1)]
+    bezny = Counter(rozostupy).most_common(1)[0][0]
+    out["trvanie"] = round(casy[-1] - casy[0], 3)
+    out["fps"] = round(1 / bezny, 3) if bezny > 0 else None
+    # Za trhnutie sa berie rozostup, ktory sa od bezneho lisi o viac nez
+    # polovicu snimku - kratsie odchylky su len zaokruhlenie casovej zakladne.
+    tolerancia = max(bezny * 0.5, 0.001)
+    vsetky = [(i, x) for i, x in enumerate(rozostupy)
+              if abs(x - bezny) > tolerancia]
+    # Zaznam useknuty uprostred skupiny snimkov necha na konci jeden snimok
+    # mimo poradia - vyriesit sa to nedá a v prehravaci to nie je vidiet.
+    # Do trhania sa preto nepocita, len sa spomenie osobitne.
+    hranica = len(rozostupy) - 2
+    trhnutia = [(i, x) for i, x in vsetky if i < hranica]
+    out["koniec_mimo_poradia"] = len(vsetky) - len(trhnutia)
+    out["bezny_rozostup"] = bezny
+    out["trhnutia"] = len(trhnutia)
+    out["kde_trha"] = [{"snimok": i + 1, "sekunda": round(casy[i], 3),
+                        "rozostup": x} for i, x in trhnutia[:20]]
+    # Kolko snimkov by pri tejto frekvencii malo byt, keby sa nic nestratilo
+    ocakavane = int(round(out["trvanie"] / bezny)) + 1 if bezny > 0 else len(casy)
+    out["chybajuce_snimky"] = max(0, ocakavane - len(casy))
+    out["plynule"] = not trhnutia and out["chybajuce_snimky"] == 0
+    return out

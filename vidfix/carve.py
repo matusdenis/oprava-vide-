@@ -549,6 +549,13 @@ def extract_annexb(mm, start: int, end: int, dst_path: str, hevc: bool = False,
     have_sps = have_pps = False
     pos = start
     ank = sorted(kotvy) if kotvy else None
+    # Posledny snimok byva useknuty koncom suboru. Necha za sebou polovicny
+    # rez, z ktoreho dekoder vyrobi snimok so zlou casovou znackou - prehravac
+    # na nom vidno zaseknutie. Radsej ho zahodime a skoncime na poslednom
+    # celom snimku.
+    if ank and len(ank) >= 2 and ank[-1] > start:
+        end = min(end, ank[-1])
+        ank = ank[:-1]
 
     def dalsia_kotva(p: int):
         if not ank:
