@@ -203,10 +203,12 @@ def prikaz_kontrola(args) -> int:
         print("Na kontrolu je potrebný ffmpeg.", file=sys.stderr)
         return 2
     zle = 0
+    prehlad = {"plynule": [], "trha": [], "chyba": []}
     for zadane in args.subor:
         cesta = _over_cestu(zadane)
         if not cesta:
             zle += 1
+            prehlad["chyba"].append((os.path.basename(str(zadane)), "cesta neexistuje"))
             continue
         print("\n" + "=" * 66)
         print(os.path.basename(cesta))
@@ -214,7 +216,9 @@ def prikaz_kontrola(args) -> int:
         if not v.get("ok"):
             print(f"  CHYBA: {v.get('chyba')}")
             zle += 1
+            prehlad["chyba"].append((os.path.basename(cesta), v.get("chyba")))
             continue
+        prehlad["plynule" if v["plynule"] else "trha"].append((os.path.basename(cesta), v))
         if v.get("stopa"):
             print(f"  {v['stopa'].strip()}")
         print(f"  snímkov: {v['snimky']}   trvanie: {v['trvanie']} s   "
@@ -234,6 +238,26 @@ def prikaz_kontrola(args) -> int:
             zle += 1
         for u in v.get("ukazky_chyb", [])[:3]:
             print(f"    {u.strip()}")
+
+    # Pri jednom subore je vypis vyssie dost; pri stovkach treba suhrn.
+    spolu = sum(len(x) for x in prehlad.values())
+    if spolu > 1:
+        print("\n" + "=" * 66)
+        print(f"SÚHRN: {spolu} súborov — {len(prehlad['plynule'])} plynulých, "
+              f"{len(prehlad['trha'])} s trhaním, {len(prehlad['chyba'])} "
+              f"nečitateľných")
+        # Najprv tie najhorsie - tam sa oplati pozriet
+        najhorsie = sorted(prehlad["trha"],
+                           key=lambda x: -(x[1]["trhnutia"]
+                                           + x[1]["chyby_dekodovania"]))
+        for nazov, v in najhorsie[:15]:
+            print(f"  {nazov:40s} {v['trhnutia']} trhnutí, "
+                  f"{v['chyby_dekodovania']} chýb dekódovania, "
+                  f"chýba ~{v['chybajuce_snimky']} snímkov")
+        if len(najhorsie) > 15:
+            print(f"  … a ďalších {len(najhorsie) - 15}")
+        for nazov, dovod in prehlad["chyba"][:10]:
+            print(f"  {nazov:40s} {dovod}")
     return 1 if zle else 0
 
 
