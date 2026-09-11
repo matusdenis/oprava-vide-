@@ -83,10 +83,23 @@ def _copy_with_prefix(src: str, dst: str, prefix: bytes, zero_until: int = 0,
 VIDEO_PRIPONY = (".mp4", ".mov", ".m4v", ".3gp", ".mts", ".m2ts", ".ts", ".m2t")
 
 
+# Pripony, ktore videom urcite nie su. Velke subory sa inak beru ako mozne
+# video (ransomver pripony menuje), ale dokument ci archiv nema zmysel skusat.
+NIE_VIDEO_PRIPONY = (
+    ".pdf", ".zip", ".rar", ".7z", ".tar", ".gz", ".dmg", ".iso", ".pkg",
+    ".psd", ".ai", ".indd", ".prproj", ".aep", ".fcpbundle", ".pptx", ".docx",
+    ".xlsx", ".numbers", ".pages", ".key", ".sketch", ".blend", ".exe", ".app",
+    ".wav", ".aiff", ".mp3", ".flac", ".jpg", ".jpeg", ".png", ".tif", ".tiff",
+    ".cr2", ".cr3", ".nef", ".arw", ".dng", ".raw", ".heic",
+)
+
+
 def _mozne_video(cesta: str) -> bool:
     nazov = os.path.basename(cesta).lower()
     if any(p in nazov for p in VIDEO_PRIPONY):
         return True
+    if any(p in nazov for p in NIE_VIDEO_PRIPONY):
+        return False
     try:
         return os.path.getsize(cesta) > (20 << 20)
     except OSError:
