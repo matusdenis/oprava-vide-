@@ -469,6 +469,34 @@ class TestDavka(ZakladVzorky):
                          log=lambda m: None, preruseny=lambda: True)
         self.assertEqual(v["hotove"], 0, "pri prerušení sa nemá spracovať nič")
 
+    def test_davka_preskoci_nezachranitelny_subor(self):
+        # súbor bez čohokoľvek použiteľného nesmie dávku zhodiť ani sa hlásiť
+        # ako chyba — jednoducho sa preskočí
+        zly = os.path.join(self.davka_dir, "zasifrovany.MOV.locked")
+        with open(zly, "wb") as f:
+            f.write(os.urandom(3 << 20))
+        try:
+            v = spusti_davku(najdi_videa(self.davka_dir), self.out("davka_skip"),
+                             TB, HeaderDB(), {"fps": 25}, log=lambda m: None)
+            preskocene = [r for r in v["vysledky"] if r.get("preskocene")]
+            self.assertEqual(len(preskocene), 1)
+            self.assertEqual(v["zlyhane"], 0, "preskočenie nie je chyba")
+            self.assertEqual(v["hotove"], 2)
+        finally:
+            os.remove(zly)
+
+    def test_plna_analyza_suhlasi_s_rychlym_triedenim(self):
+        # obe cesty musia dať rovnaký záver, inak dávka pýta postup, ktorý
+        # rýchle triedenie vôbec nenavrhlo
+        for cesta in najdi_videa(self.davka_dir):
+            rychly = rychly_verdikt(cesta)
+            plna = analyze(cesta, HeaderDB(), TB)
+            navrh = (plna.get("strategie") or [{}])[0].get("id")
+            if rychly["verdikt"] == "nezachranitelne":
+                self.assertEqual(navrh, "nezachranitelne", cesta)
+            else:
+                self.assertNotEqual(navrh, "nezachranitelne", cesta)
+
     def test_davka_prezije_chybny_subor(self):
         zly = os.path.join(self.davka_dir, "pokazeny.mp4")
         with open(zly, "wb") as f:

@@ -129,6 +129,11 @@ def analyze(path: str, db, toolbox=None, log=None) -> dict:
         # statisticky odhad zasifrovanej casti (funguje aj bez indexu)
         rep["odhad_sifrovanej_casti"] = carve.estimate_encrypted_prefix(mm, size)
         rep["mapa_sifrovania"] = profil_sifrovania(mm, size)
+        # Rovnaká poistka ako pri rýchlom triedení: keď dáta vyzerajú
+        # zašifrovane, ešte sa overí, či v tele súboru nie je obraz. Video
+        # s vysokým dátovým tokom sa od šifrovaných dát štatisticky nelíši.
+        if rep["mapa_sifrovania"].get("podiel", 0) > 0.55:
+            rep["mapa_sifrovania"]["obraz_v_tele"] = _je_v_tele_video(mm, size)
     finally:
         mm.close()
         f.close()
@@ -146,7 +151,11 @@ def navrhni_strategie(rep: dict) -> list:
     # Zašifrovaný celý súbor nemá zmysel opravovať — nie je v ňom čo zachrániť.
     # Radšej to povedať rovno, než nechať používateľa čakať na neúspech.
     mapa = rep.get("mapa_sifrovania") or {}
-    if mapa.get("cely_subor") or mapa.get("podiel", 0) > 0.55:
+    # Prežitý index je dôkaz, že súbor je z väčšiny neporušený — vtedy sa
+    # nikdy nevyhlasuje za stratený, nech štatistika hovorí čokoľvek.
+    ma_index = bool(d.get("index_moov"))
+    if not ma_index and not mapa.get("obraz_v_tele") \
+            and (mapa.get("cely_subor") or mapa.get("podiel", 0) > 0.55):
         return [{
             "id": "nezachranitelne",
             "nazov": "Tento súbor sa zachrániť nedá",

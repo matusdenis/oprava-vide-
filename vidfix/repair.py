@@ -622,6 +622,9 @@ STRATEGIE = {
 
 
 def spusti(strategy_id: str, ctx: Ctx) -> dict:
+    if strategy_id == "nezachranitelne":
+        raise RuntimeError("Tento súbor sa opraviť nedá — nezostalo v ňom nič, "
+                           "z čoho by sa dal obraz poskladať.")
     fn = STRATEGIE.get(strategy_id)
     if fn is None:
         raise ValueError(f"Neznáma stratégia: {strategy_id}")
@@ -700,7 +703,7 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
     frekvencia - sa preberaju z prveho, uspesneho behu.
     """
     vysledky = []
-    hotove = zlyhane = 0
+    hotove = zlyhane = preskocene = 0
     for i, cesta in enumerate(subory, 1):
         if preruseny and preruseny():
             log("Dávka prerušená používateľom.")
@@ -714,6 +717,13 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
             if not zvolena:
                 navrhy = [s["id"] for s in rep.get("strategie", [])]
                 zvolena = navrhy[0] if navrhy else None
+            if zvolena == "nezachranitelne":
+                dovod = (rep.get("strategie") or [{}])[0].get("nazov", "nedá sa opraviť")
+                log(f"— preskakujem: {dovod}")
+                vysledky.append({"subor": nazov, "cesta": cesta, "ok": False,
+                                 "preskocene": True, "chyba": dovod})
+                preskocene += 1
+                continue
             if not zvolena:
                 raise RuntimeError("Pre tento súbor sa nenašiel vhodný postup.")
             if zvolena in VYZADUJU_FFMPEG and not toolbox.path("ffmpeg"):
@@ -735,10 +745,12 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
 
     log("")
     log("=" * 56)
-    log(f"Hotovo: {hotove} z {len(subory)} súborov opravených, {zlyhane} zlyhalo.")
+    log(f"Hotovo: {hotove} z {len(subory)} súborov opravených, {zlyhane} zlyhalo"
+        + (f", {preskocene} preskočených (nedajú sa opraviť)." if preskocene else "."))
     return {"ok": hotove > 0, "pocet": len(subory), "hotove": hotove,
-            "zlyhane": zlyhane, "vysledky": vysledky,
-            "zhrnutie": f"Opravených {hotove} z {len(subory)} súborov."}
+            "zlyhane": zlyhane, "preskocene": preskocene, "vysledky": vysledky,
+            "zhrnutie": f"Opravených {hotove} z {len(subory)} súborov."
+                        + (f" {preskocene} sa opraviť nedá." if preskocene else "")}
 
 
 # ---------------------------------------------------------------------------
