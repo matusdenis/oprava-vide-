@@ -429,6 +429,71 @@ class TestVysokyDatovyTok(ZakladVzorky):
             carve.PRAH_CHI2 = povodny
 
 
+class TestKotvySnimkov(unittest.TestCase):
+    """Kamery zapisujú pred každý snímok krátky oddeľovač.
+
+    Je to najspoľahlivejší znak skutočného začiatku obrazu: v zašifrovaných
+    dátach je šanca na náhodnú zhodu zanedbateľná, kým kontrolu štruktúry
+    náhodné dáta občas prejdú.
+    """
+
+    def _mm(self, data: bytes):
+        cesta = os.path.join(self.dir, "vzorka.bin")
+        with open(cesta, "wb") as f:
+            f.write(data)
+        return mp4.open_mm(cesta)
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="vidfix-kotvy-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_oddelovac_snimku_sa_najde(self):
+        # [dĺžka 2][AUD] a za ním normálny rez — presne ako to píše kamera
+        rez = b"\x65" + b"\x88" * 4000
+        data = (os.urandom(1 << 20)
+                + b"\x00\x00\x00\x02\x09\x10"
+                + len(rez).to_bytes(4, "big") + rez) * 1
+        data += (b"\x00\x00\x00\x02\x09\x30"
+                 + len(rez).to_bytes(4, "big") + rez) * 8
+        f, mm, size = self._mm(data)
+        try:
+            kotvy = carve.kotvy_offsety(mm, size)
+            self.assertEqual(kotvy[0], 1 << 20)
+            self.assertEqual(len(kotvy), 9)
+        finally:
+            mm.close()
+            f.close()
+
+    def test_v_nahodnych_datach_ziadne_kotvy(self):
+        f, mm, size = self._mm(os.urandom(8 << 20))
+        try:
+            self.assertEqual(carve.kotvy_offsety(mm, size), [])
+        finally:
+            mm.close()
+            f.close()
+
+    def test_vyrezavanie_sa_chyti_dalsieho_snimku(self):
+        """Za obrazom býva kus zvuku — bez kotiev sa stream po ňom rozpadne."""
+        rez = b"\x65" + b"\x88" * 4000
+        snimok = b"\x00\x00\x00\x02\x09\x10" + len(rez).to_bytes(4, "big") + rez
+        zvuk = os.urandom(3000)          # PCM medzi snímkami, nie NAL jednotka
+        data = b"".join(snimok + zvuk for _ in range(12))
+        f, mm, size = self._mm(data)
+        try:
+            kotvy = carve.kotvy_offsety(mm, size)
+            self.assertEqual(len(kotvy), 12)
+            dst = os.path.join(self.dir, "von.h264")
+            stat = carve.extract_annexb(mm, 0, size, dst, max_len=4 << 20,
+                                        kotvy=kotvy)
+            # dva NAL na snímok (oddeľovač + rez), žiadny nesmie chýbať
+            self.assertEqual(stat["nals"], 24)
+        finally:
+            mm.close()
+            f.close()
+
+
 @potrebuje_ffmpeg
 class TestDavka(ZakladVzorky):
     """Dávka musí zvládnuť priečinok, kde sú rôzne poškodené súbory."""

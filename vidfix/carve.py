@@ -13,7 +13,9 @@ sa zabalia. Tento modul to vie pre:
 """
 from __future__ import annotations
 
+import bisect
 import os
+import re
 import struct
 from collections import Counter
 
@@ -169,6 +171,9 @@ def ts_extract_video(mm, size: int, sync_offset: int, packet_size: int, dst_path
 
 VIDEO_NAL_TYPES_H264 = {1, 5, 6, 7, 8, 9}      # rez, IDR, SEI, SPS, PPS, AUD
 VIDEO_NAL_TYPES_H265 = {0, 1, 19, 20, 21, 32, 33, 34, 35, 39}
+# Riadiace jednotky, ktore byvaju kratke a zacinaju pristupovu jednotku
+RIADIACE_H264 = {6, 7, 8, 9}
+RIADIACE_H265 = {32, 33, 34, 35, 39, 40}
 
 
 def nal_here(mm, p: int, size: int, hevc: bool = False, min_len: int = 1,
@@ -177,12 +182,20 @@ def nal_here(mm, p: int, size: int, hevc: bool = False, min_len: int = 1,
     if p + 5 > size:
         return None
     n = int.from_bytes(mm[p:p + 4], "big")
-    if n < min_len or n > max_len or p + 4 + n > size:
+    if n < 1 or n > max_len or p + 4 + n > size:
         return None
     hdr = mm[p + 4]
     if hdr & 0x80:
         return None
     t = ((hdr >> 1) & 0x3F) if hevc else (hdr & 0x1F)
+    # Profesionalne kamery zacinaju kazdu pristupovu jednotku kratkym
+    # oddelovacom (typ 9 v H.264, 35 v H.265) - ten ma dva bajty. Dolna hranica
+    # dlzky pre riadiace jednotky preto neplati; inak by sa skutocny zaciatok
+    # streamu nikdy nenasiel. Falosnu zhodu to nezvysuje: dlzkovy prefix
+    # takej jednotky (00 00 00 02) je v nahodnych datach este nepravdepodobnejsi
+    # nez prefix dlhej vzorky.
+    if n < min_len and t not in (RIADIACE_H265 if hevc else RIADIACE_H264):
+        return None
     allowed = VIDEO_NAL_TYPES_H265 if hevc else VIDEO_NAL_TYPES_H264
     if strict_type and t not in allowed:
         return None
@@ -354,6 +367,143 @@ def find_nal_stream(mm, size: int, hint: int = 0, hevc: bool | None = None,
     return None
 
 
+# ---------------------------------------------------------------------------
+# Kotvy: zaciatky pristupovych jednotiek
+# ---------------------------------------------------------------------------
+# Kamery zapisuju pred kazdy snimok kratke riadiace jednotky - oddelovac
+# pristupovej jednotky (AUD), pripadne sadu parametrov. V MP4 maju tvar
+# [4B dlzka][hlavicka NAL], pricom dlzka je velmi mala. Vznikne tak pat- az
+# sestbajtova postupnost, ktora je pre nahodne (zasifrovane) data prakticky
+# nedosiahnutelna: sanca na zhodu je radovo 1 : 10^12 na bajt. Je to teda
+# omnoho spolahlivejsi znak skutocneho zaciatku snimku nez prechadzka
+# strukturou, ktora sa v sifrovanych datach obcas nahodou podari.
+KOTVY = (
+    (False, rb"\x00\x00\x00\x02\x09", "oddeľovač snímku H.264"),
+    (True, rb"\x00\x00\x00\x03\x46\x01", "oddeľovač snímku H.265"),
+    (False, rb"\x00\x00\x00[\x08-\x40]\x67", "hlavička SPS H.264"),
+    (True, rb"\x00\x00\x00[\x08-\x40]\x40\x01", "hlavička VPS H.265"),
+)
+
+MIN_NALS_KOTVA = 4
+MIN_POKRYTIE_KOTVA = 0.85
+
+
+_KOTVY_RE = tuple((h, re.compile(v, re.S), popis) for h, v, popis in KOTVY)
+
+
+def kotvy_offsety(mm, size: int, hint: int = 0, hevc: bool | None = None,
+                  limit: int = 2000000) -> list:
+    """Vrati pozicie vsetkych zaciatkov snimkov od `hint` dalej.
+
+    Hlada sa priamo v pamatovo mapovanom subore, takze aj nekolkogigabajtovy
+    zaznam prejde bez toho, aby sa nacital do pamate.
+    """
+    najdene = set()
+    for je_hevc, vzor, _popis in _KOTVY_RE:
+        if hevc is not None and bool(hevc) != je_hevc:
+            continue
+        pocet = 0
+        for m in vzor.finditer(mm, max(0, hint), size):
+            idx = m.start()
+            if nal_here(mm, idx, size, je_hevc, min_len=1, max_len=4 << 20) is None:
+                continue
+            najdene.add(idx)
+            pocet += 1
+            if pocet >= limit:
+                break
+    return sorted(najdene)
+
+
+def najdi_kotvy(mm, size: int, hint: int = 0, pocet: int = 24,
+                hevc: bool | None = None, log=None) -> list:
+    """Najde zaciatky snimkov podla riadiacich jednotiek kamery.
+
+    Vracia zoznam kandidatov v poradi od zaciatku suboru. Kazdy sa este overi
+    prechadzkou, aby sa vylucila nahodna zhoda aj teoreticky.
+    """
+    najdene = []
+    for je_hevc, vzor, popis in _KOTVY_RE:
+        if hevc is not None and bool(hevc) != je_hevc:
+            continue
+        najdenych = 0
+        for m in vzor.finditer(mm, max(0, hint), size):
+            idx = m.start()
+            if nal_here(mm, idx, size, je_hevc, min_len=1,
+                        max_len=4 << 20) is None:
+                continue
+            st = walk_stats(mm, idx, size, je_hevc, max_len=4 << 20)
+            if st["nals"] < MIN_NALS_KOTVA or st["coverage"] < MIN_POKRYTIE_KOTVA:
+                continue
+            najdene.append({"offset": idx, "hevc": je_hevc, "max_len": 4 << 20,
+                            "statistika": st, "kolo": popis, "kotva": True})
+            najdenych += 1
+            if najdenych >= pocet:
+                break
+    videne = set()
+    out = []
+    for k in sorted(najdene, key=lambda k: k["offset"]):
+        if k["offset"] in videne:
+            continue
+        videne.add(k["offset"])
+        out.append(k)
+    if log and out:
+        log(f"  podľa oddeľovačov snímkov nájdených {len(out)} možných "
+            f"začiatkov (prvý na offsete {out[0]['offset']})")
+    return out[:pocet]
+
+
+def najdi_kandidatov(mm, size: int, hint: int = 0, pocet: int = 48,
+                     min_len: int = 256, log=None) -> list:
+    """Vrati viac moznych zaciatkov streamu, nie len prvy.
+
+    V zasifrovanej casti sa nahodou najdu miesta, ktore prejdu aj prisnou
+    kontrolou struktury - poznat sa daju az tym, ze sa z nich video nedekoduje.
+    Preto sa nazbiera viac kandidatov a rozhodne sa medzi nimi skusobnym
+    dekodovanim.
+    """
+    kandidati = []
+    for scan in SCAN_PASSES:
+        for je_hevc in (False, True):
+            pos = max(0, hint)
+            najdene = 0
+            while pos < size and najdene < pocet:
+                idx = mm.find(b"\x00", pos, size)
+                if idx < 0:
+                    break
+                if nal_here(mm, idx, size, je_hevc, min_len=min_len,
+                            max_len=scan["max_len"], deep=True) is not None:
+                    st = walk_stats(mm, idx, size, je_hevc, max_len=scan["max_len"])
+                    if st["nals"] >= scan["min_nals"] \
+                            and st["coverage"] >= scan["min_coverage"]:
+                        kandidati.append({"offset": idx, "hevc": je_hevc,
+                                          "max_len": scan["max_len"],
+                                          "statistika": st, "kolo": scan["popis"]})
+                        najdene += 1
+                        # Dalsieho kandidata hladame kusok dalej - nie az za
+                        # koncom prechadzky, lebo skutocny zaciatok streamu
+                        # byva tesne za falosnou zhodou a takto by sa preskocil.
+                        pos = idx + 65536
+                        continue
+                pos = idx + 1
+    # Kandidati sa zbieraju zo VSETKYCH kol. Prisne kolo obmedzuje velkost
+    # jednej vzorky na 256 KiB, lenze profesionalna kamera ma I-snimok aj
+    # vacsi - skutocny zaciatok by sa tak nasiel len v tom volnejsom.
+    videne = set()
+    out = []
+    for k in sorted(kandidati, key=lambda k: (k["offset"], -k["max_len"])):
+        kluc = (k["offset"], k["hevc"])
+        if kluc in videne:
+            continue
+        videne.add(kluc)
+        out.append(k)
+    if log:
+        for k in out[:pocet]:
+            log(f"  kandidát: offset {k['offset']} "
+                f"({'H.265' if k['hevc'] else 'H.264'}, "
+                f"{k['statistika']['nals']} NAL jednotiek)")
+    return out[:pocet]
+
+
 def find_nal_stream_start(mm, size: int, **kw) -> int | None:
     """Ako `find_nal_stream`, ale vracia iba offset."""
     r = find_nal_stream(mm, size, **kw)
@@ -362,25 +512,45 @@ def find_nal_stream_start(mm, size: int, **kw) -> int | None:
 
 def extract_annexb(mm, start: int, end: int, dst_path: str, hevc: bool = False,
                    sps_pps: bytes = b"", log=None, min_len: int = 256,
-                   gap_window: int = 1 << 20, max_len: int = 256 << 10) -> dict:
+                   gap_window: int = 1 << 20, max_len: int = 256 << 10,
+                   kotvy: list | None = None) -> dict:
     """Prevedie vzorky s dlzkovym prefixom na surovy stream Annex-B.
 
     Annex-B (start kody 00 00 00 01) vie ffmpeg nacitat aj uplne bez akejkolvek
     hlavicky kontajnera - preto je to idealny medzikrok pri zachrane.
+
+    Ked su k dispozicii `kotvy` (pozicie zaciatkov jednotlivych snimkov), pouziju
+    sa ako pevne body: ziadna vzorka nesmie presiahnut zaciatok dalsieho snimku
+    a po kazdom preruseni sa pokracuje presne od neho. Bez nich sa musi hadat -
+    a kus zvuku sa lahko vezme ako obraz, takze sa stream po par snimkoch
+    rozpadne.
     """
     written = nals = gaps = 0
     have_sps = have_pps = False
     pos = start
+    ank = sorted(kotvy) if kotvy else None
+
+    def dalsia_kotva(p: int):
+        if not ank:
+            return None
+        i = bisect.bisect_right(ank, p)
+        return ank[i] if i < len(ank) else None
+
     with open(dst_path, "wb") as fo:
         if sps_pps:
             fo.write(sps_pps)
             written += len(sps_pps)
             have_sps = have_pps = True
         while pos + 5 <= end:
+            kot = dalsia_kotva(pos)
             n = nal_here(mm, pos, end, hevc, min_len=1, max_len=max_len,
                          strict_type=False, deep=True)
+            if n is not None and kot is not None and pos + 4 + n > kot:
+                n = None        # vzorka by prekrocila zaciatok dalsieho snimku
             if n is None:
-                nxt = _resync(mm, pos + 1, end, hevc, gap_window, min_len, max_len)
+                nxt = (kot if ank is not None
+                       else _resync(mm, pos + 1, end, hevc, gap_window, min_len,
+                                    max_len))
                 if nxt is None:
                     break
                 gaps += 1

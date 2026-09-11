@@ -180,8 +180,11 @@ def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
     if not subory:
         return []
 
-    ctx.log(f"Hľadám parametre kamery v ostatných videách v okolí "
-            f"({len(subory)} súborov, prehľadávajú sa aj poškodené)…")
+    # Funkcia sa vola dvakrat (H.264 a H.265); hlasku staci vypisat raz.
+    if not getattr(ctx, "_vzory_ohlasene", False):
+        ctx.log(f"Hľadám parametre kamery v ostatných videách v okolí "
+                f"({len(subory)} súborov, prehľadávajú sa aj poškodené)…")
+        ctx._vzory_ohlasene = True
     kandidati = []
     videne = set()
     for cesta in subory[:max_suborov]:
@@ -193,7 +196,6 @@ def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
         if not ps or ps in videne:
             continue
         videne.add(ps)
-        kandidati += _varianty_rozlisenia(ctx, ps, hevc, os.path.basename(cesta), videne)
         sps = (carve.find_nal_in_annexb(ps, 33, hevc=True) if hevc
                else carve.find_sps_in_annexb(ps))
         info = ((carve.plausible_hevc_sps(sps) if hevc else carve.plausible_sps(sps))
@@ -202,10 +204,110 @@ def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
         popis = (f"parametre z {nazov} ({info['sirka']}×{info['vyska']}, {info['profil']})"
                  if info else f"parametre z {nazov}")
         ctx.log(f"  našiel som {popis}")
-        kandidati.append({"popis": popis, "blob": ps, "kandidat": None})
-    if not kandidati:
-        ctx.log("  v okolitých videách sa parametre nenašli")
+        # Nezmenena hlavicka ide vzdy prva: je to presne to, co kamera zapisala.
+        # Az za nou nasleduju varianty s inym rozlisenim pre pripad, ze zdravy
+        # subor vznikol v inom rezime.
+        kandidati.append({"popis": popis, "blob": ps, "kandidat": None,
+                          "povodne": True})
+        kandidati += _varianty_rozlisenia(ctx, ps, hevc, nazov, videne)
     return kandidati
+
+
+def _skus_kandidata(ctx: Ctx, mm, size: int, kand: dict, blob: bytes,
+                    vzorka: int = 2 << 20) -> dict:
+    """Vyreze z daneho miesta kratku vzorku a skusi ju naozaj dekodovat.
+
+    Toto je jediny spolahlivy sposob, ako rozoznat skutocny zaciatok streamu od
+    nahodnej zhody v zasifrovanych datach: zhoda moze prejst akoukolvek
+    kontrolou struktury, ale dekodovat sa z nej nedá nic.
+    """
+    docasny = os.path.join(ctx.outdir, "_skuska_start.h264")
+    try:
+        carve.extract_annexb(mm, kand["offset"], min(size, kand["offset"] + vzorka * 3),
+                             docasny, hevc=kand["hevc"], max_len=kand["max_len"])
+        with open(docasny, "rb") as f:
+            telo = f.read(vzorka)
+        if not telo:
+            return {"snimky": 0, "kvalita": 0.0, "skore": 0.0}
+        return h264_params.score_headers(ctx.toolbox, blob, telo, ctx.outdir,
+                                         hevc=kand["hevc"])
+    except (OSError, RuntimeError):
+        return {"snimky": 0, "kvalita": 0.0, "skore": 0.0}
+    finally:
+        try:
+            os.remove(docasny)
+        except OSError:
+            pass
+
+
+def _vyber_start(ctx: Ctx, mm, size: int, hlavicky: list, hint: int = 0,
+                 prvy_kandidat=None, pokusov: int = 12,
+                 hevc: bool | None = None) -> dict | None:
+    """Najde miesto, od ktoreho sa video naozaj dekoduje.
+
+    Struktura sama o sebe nestaci: aj v zasifrovanych datach sa obcas nahodou
+    najde miesto, ktore prejde prechadzkou. Spolahliva je az dvojica
+    - kotva (oddelovac snimku, ktory kamera zapisuje pred kazdy snimok) a
+    skusobne dekodovanie s parametrami z vzoru. Kotvy sa preveruju od zaciatku
+    suboru, takze vyhra ta najskorsia, z ktorej sa obraz naozaj poskladá.
+    """
+    # Na overenie zaciatku staci nezmenena hlavicka z rovnakej kamery. Varianty
+    # s prepisanym rozlisenim sa tu neskusaju - obraz by sa z nich nedekodoval
+    # a spravny zaciatok by sa zahodil.
+    overovacie = [h for h in hlavicky if h.get("povodne")] or hlavicky
+    overovacie = overovacie[:3]
+
+    def over(k: dict) -> bool:
+        for h in overovacie:
+            res = _skus_kandidata(ctx, mm, size, k, h["blob"])
+            if res["kvalita"] >= 0.5 and res["snimky"] >= 5:
+                return True
+        return False
+
+    kotvy = carve.najdi_kotvy(mm, size, hint=max(0, hint), pocet=pokusov,
+                              hevc=hevc, log=ctx.log)
+
+    def zaloha() -> list:
+        """Pomalsie hladanie podla struktury - az ked kotvy nic nedali.
+
+        Nie kazda kamera zapisuje pred snimky oddelovace; vtedy neostava nic
+        ine, nez prejst miesta, ktore prejdu kontrolou struktury, a kazde
+        skusit dekodovat.
+        """
+        zvysok = carve.najdi_kandidatov(mm, size, hint=max(0, hint),
+                                        pocet=pokusov * 2)
+        if prvy_kandidat is not None:
+            zvysok = [prvy_kandidat] + [k for k in zvysok
+                                        if k["offset"] != prvy_kandidat["offset"]]
+        return zvysok
+
+    if not hlavicky:
+        if kotvy:
+            return kotvy[0]
+        z = zaloha()
+        return z[0] if z else None
+
+    for i, k in enumerate(kotvy, 1):
+        if over(k):
+            if i > 1:
+                ctx.log(f"  prvých {i - 1} miest sa dekódovať nedá — "
+                        f"začínam na offsete {k['offset']}")
+            return k
+    zvysne = zaloha()
+    for k in zvysne:
+        if over(k):
+            ctx.log(f"  skúšobným dekódovaním nájdený začiatok na offsete "
+                    f"{k['offset']}")
+            return k
+    if kotvy:
+        ctx.log("  skúšobné dekódovanie nikde neprešlo — beriem prvý "
+                "oddeľovač snímku")
+        return kotvy[0]
+    if zvysne:
+        ctx.log("  žiadne miesto v súbore sa nedá dekódovať — beriem prvý "
+                "nájdený začiatok")
+        return zvysne[0]
+    return None
 
 
 def _do_mp4(ctx: Ctx, raw: str, dst: str, hevc: bool, fps: int) -> dict | None:
@@ -473,35 +575,52 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
         est = carve.estimate_encrypted_prefix(mm, size, log=ctx.log)
         hint = ctx.options.get("hranica_poskodenia")
         if hint is None:
-            hint = est.get("koniec") or 0
+            # Odhad podľa rovnomernosti dát sa nedá brať ako hranica hľadania.
+            # Záznam z kamery s vysokým dátovým tokom (napríklad 1080p50 pri
+            # 46 Mbit/s) má rozloženie bajtov takmer rovnomerné, takže test
+            # označí za zašifrované aj neporušené video a hľadanie by začalo
+            # priďaleko — až medzi náhodnými zhodami. Preto sa prechádza od
+            # začiatku; zašifrovaná časť sa aj tak preskočí sama, lebo v nej
+            # žiadny platný sled NAL jednotiek nie je.
+            hint = 0
+            if est.get("koniec"):
+                ctx.log(f"  (odhad hranice {est['koniec']} B beriem len ako "
+                        f"orientačný — hľadám od začiatku súboru)")
         # Kodek vopred nepoznáme — index, v ktorom bol zapísaný, je zničený.
-        # Preto sa skúša H.264 aj H.265 a vyhrá ten, ktorý dáva súvislý stream.
+        # Preto sa zbierajú kandidáti pre H.264 aj H.265 a rozhodne sa medzi
+        # nimi skúšobným dekódovaním: náhodná zhoda v zašifrovaných dátach
+        # prejde akoukoľvek kontrolou štruktúry, ale dekódovať sa z nej nedá.
+        # Keď používateľ kodek pozná, obmedzí sa hľadanie len naň.
         volba_hevc = ctx.options.get("hevc")
-        ctx.log(f"Hľadám začiatok obrazového streamu od offsetu {hint} "
-                f"(kodek {'H.265' if volba_hevc else 'H.264'} podľa voľby)…"
-                if volba_hevc is not None else
-                f"Hľadám začiatok obrazového streamu od offsetu {hint} "
-                f"(kodek rozpoznám automaticky)…")
-        found = carve.find_nal_stream(mm, size, hint=hint, hevc=volba_hevc, log=ctx.log)
-        if not found and hint:
-            ctx.log("Skúšam hľadať od začiatku súboru …")
-            found = carve.find_nal_stream(mm, size, hint=0, hevc=volba_hevc, log=ctx.log)
-        if not found:
+        ctx.log("Hľadám začiatok obrazového streamu…")
+        # Hotové parametre z okolitých videí — potrebné už teraz, lebo práve
+        # nimi sa jednotlivé miesta preverujú skúšobným dekódovaním.
+        hlavicky = _zbieraj_vzory(ctx, False) + _zbieraj_vzory(ctx, True)
+        found = _vyber_start(ctx, mm, size, hlavicky, hint=hint,
+                             hevc=volba_hevc)
+        if found is None:
             raise RuntimeError(
                 "V súbore sa nenašiel žiadny súvislý obrazový stream. Súbor je "
-                "pravdepodobne zašifrovaný celý, alebo používa iný kodek ako H.264/H.265.")
+                "pravdepodobne zašifrovaný celý, alebo používa iný kodek ako "
+                "H.264/H.265.")
 
         hevc = found["hevc"]
-        ctx.log(f"Rozpoznaný kodek: {'H.265 / HEVC' if hevc else 'H.264 / AVC'}")
-        if hint and found["offset"] > hint + (32 << 20):
-            ctx.log("Pozor: stream sa našiel oveľa ďalej, než kam siaha zašifrovaná "
-                    "časť — je možné, že poškodenie je rozsiahlejšie.")
+        ctx.log(f"Rozpoznaný kodek: {'H.265 / HEVC' if hevc else 'H.264 / AVC'}, "
+                f"začiatok na offsete {found['offset']}")
         raw = ctx.out("vyrezany", ".h265" if hevc else ".h264")
         params = carve.collect_parameter_sets(mm, found["offset"], size, hevc=hevc)
         if params:
             ctx.log(f"Parametre SPS/PPS sa našli priamo v tele streamu ({len(params)} B).")
+        # Zoznam zaciatkov vsetkych snimkov. Pri vyrezavani slúži ako pevný
+        # bod: stream sa po každom kúsku zvuku chytí presne tam, kde začína
+        # ďalší snímok, namiesto hádania.
+        kotvy = carve.kotvy_offsety(mm, size, hint=found["offset"], hevc=hevc)
+        if kotvy:
+            ctx.log(f"Nájdených {len(kotvy)} začiatkov snímkov — použijem ich "
+                    f"ako pevné body pri vyrezávaní.")
         stat = carve.extract_annexb(mm, found["offset"], size, raw, hevc=hevc,
-                                    sps_pps=params, max_len=found["max_len"], log=ctx.log)
+                                    sps_pps=params, max_len=found["max_len"],
+                                    kotvy=kotvy, log=ctx.log)
         ctx.log(f"Vyrezaných {stat['nals']} NAL jednotiek, {human(stat['bytes'])}, "
                 f"preskočených medzier: {stat['gaps']}")
     finally:
@@ -526,7 +645,7 @@ def strategia_mp4_carve(ctx: Ctx) -> dict:
                  f"{info['profil']})" if info else "parametre z tela streamu")
         ctx.log(f"V tele streamu sa našli {popis} — použijem ich.")
         extra.append({"popis": popis, "blob": vlastne, "kandidat": None})
-    extra += _zbieraj_vzory(ctx, hevc)
+    extra += [h for h in hlavicky]
 
     hlavicka = b""
     najdene = None
