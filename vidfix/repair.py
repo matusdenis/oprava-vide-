@@ -163,7 +163,13 @@ def _varianty_rozlisenia(ctx: Ctx, ps: bytes, hevc: bool, zdroj: str,
     return out
 
 
-def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
+# Parametre okolitych videi su pre cely priecinok rovnake. Pri davke cez
+# stovky suborov by sa inak to iste prehladavanie zopakovalo pri kazdom z nich.
+_VZORY_CACHE: dict = {}
+
+
+def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60,
+                   dost_zdrojov: int = 3) -> list:
     """Pozbiera parametre obrazu z ostatných videí v okolí.
 
     Kľúčové je, že sa hľadá aj v POŠKODENÝCH súboroch: ransomvér šifruje len
@@ -192,6 +198,11 @@ def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
     if not subory:
         return []
 
+    kluc = (os.path.dirname(ctx.path), vzor or "", hevc,
+            ctx.options.get("sirka"), ctx.options.get("vyska"))
+    if kluc in _VZORY_CACHE:
+        return _VZORY_CACHE[kluc]
+
     # Funkcia sa vola dvakrat (H.264 a H.265); hlasku staci vypisat raz.
     if not getattr(ctx, "_vzory_ohlasene", False):
         ctx.log(f"Hľadám parametre kamery v ostatných videách v okolí "
@@ -199,9 +210,15 @@ def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
         ctx._vzory_ohlasene = True
     kandidati = []
     videne = set()
+    zdrojov = 0
     for cesta in subory[:max_suborov]:
+        if zdrojov >= dost_zdrojov:
+            break
         try:
-            surove = mp4.codec_parameter_sets(cesta)
+            # Index sa hlada len na konci suboru. Ked tam nie je, nema zmysel
+            # kvoli jednemu susedovi prejst cely viacgigabajtovy zaznam -
+            # parametre sa nájdu v niektorom z ostatnych.
+            surove = mp4.codec_parameter_sets(cesta, rychlo=True)
         except (OSError, ValueError):
             continue
         ps = carve.only_parameter_sets(surove, hevc)
@@ -222,6 +239,8 @@ def _zbieraj_vzory(ctx: Ctx, hevc: bool, max_suborov: int = 60) -> list:
         kandidati.append({"popis": popis, "blob": ps, "kandidat": None,
                           "povodne": True})
         kandidati += _varianty_rozlisenia(ctx, ps, hevc, nazov, videne)
+        zdrojov += 1
+    _VZORY_CACHE[kluc] = kandidati
     return kandidati
 
 
@@ -1049,6 +1068,7 @@ def spusti_davku(subory: list, outdir: str, toolbox, db, volby: dict, log,
         except OSError:
             continue
     over_vystup(outdir, potrebne)
+    _VZORY_CACHE.clear()
 
     vysledky = []
     hotove = zlyhane = preskocene = uz_hotove = 0

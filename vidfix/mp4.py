@@ -809,7 +809,7 @@ def najdi_moov(mm, size: int, chvost: int = 256 << 20, rychlo: bool = False):
     return next((b for b in st["boxes"] if b.type == b"moov"), None)
 
 
-def codec_parameter_sets(path: str) -> bytes:
+def codec_parameter_sets(path: str, rychlo: bool = False) -> bytes:
     """Vytiahne parametre obrazu z MP4/MOV - pre H.264 aj H.265.
 
     Funguje aj na POSKODENOM subore: index `moov` byva na konci suboru, takze
@@ -819,10 +819,14 @@ def codec_parameter_sets(path: str) -> bytes:
 
     Pre H.264 su parametre v boxe `avcC`, pre H.265 v `hvcC` - ten ma iné
     rozlozenie, preto sa citaju osobitne.
+
+    S `rychlo=True` sa index hlada len na konci suboru. Pri prehladavani okolia
+    je to spravne: parametre staci najst v jednom subore, takze nema zmysel
+    kvoli kazdemu susedovi prejst cely viacgigabajtovy zaznam.
     """
     f, mm, size = open_mm(path)
     try:
-        moov = najdi_moov(mm, size)
+        moov = najdi_moov(mm, size, rychlo=rychlo)
         if moov is None:
             return b""
         moov.children = parse_tree(mm, moov.data_offset, moov.end, size)

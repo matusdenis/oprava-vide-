@@ -20,6 +20,7 @@ from vidfix.analyze import (analyze, rychly_verdikt,             # noqa: E402
 from vidfix.headerdb import HeaderDB                             # noqa: E402
 from vidfix.repair import (Ctx, najdi_medzikroky, najdi_videa,   # noqa: E402
                            hotovy_vystup, over_vystup, zisti_fps,
+                           _VZORY_CACHE, _zbieraj_vzory,
                            spusti, spusti_davku)
 from vidfix.tools import Toolbox                                 # noqa: E402
 from vidfix.util import entropy, human                           # noqa: E402
@@ -494,6 +495,51 @@ class TestPokracovanieDavky(ZakladVzorky):
                              {"prerobit_hotove": True}, log=lambda m: None)
         self.assertEqual(znova["uz_hotove"], 0)
         self.assertEqual(znova["hotove"], 2)
+
+
+@potrebuje_ffmpeg
+class TestPamatNaVzory(ZakladVzorky):
+    """Parametre okolitých videí sú pre celý priečinok rovnaké.
+
+    Bez zapamätania sa to isté prehľadávanie zopakuje pri každom z niekoľkých
+    sto súborov — a na veľkých záznamoch to je hodina navyše.
+    """
+
+    def setUp(self):
+        self.priecinok = self.out("pamat_vzory")
+        os.makedirs(self.priecinok, exist_ok=True)
+        self.poskodeny = posifruj_zaciatok(
+            self.zdroj, os.path.join(self.priecinok, "a.mp4"), 256 * 1024)
+        shutil.copy(self.zdroj, os.path.join(self.priecinok, "sused.mp4"))
+        _VZORY_CACHE.clear()
+
+    def test_druhe_volanie_uz_neprehladava(self):
+        ctx = Ctx(self.poskodeny, self.out("pamat_von"), TB, HeaderDB(), {})
+        prve = _zbieraj_vzory(ctx, False)
+        self.assertTrue(prve, "parametre suseda sa mali nájsť")
+
+        volane = []
+        povodne = mp4.codec_parameter_sets
+
+        def sledovane(cesta, *a, **kw):
+            volane.append(cesta)
+            return povodne(cesta, *a, **kw)
+
+        mp4.codec_parameter_sets = sledovane
+        try:
+            druhe = _zbieraj_vzory(ctx, False)
+        finally:
+            mp4.codec_parameter_sets = povodne
+        self.assertEqual(druhe, prve)
+        self.assertEqual(volane, [], "druhé volanie nemá znova prehľadávať")
+
+    def test_iny_vzor_ma_vlastny_zaznam(self):
+        ctx = Ctx(self.poskodeny, self.out("pamat_von2"), TB, HeaderDB(), {})
+        _zbieraj_vzory(ctx, False)
+        iny = Ctx(self.poskodeny, self.out("pamat_von2"), TB, HeaderDB(),
+                  {"vzor": self.zdroj})
+        self.assertTrue(_zbieraj_vzory(iny, False))
+        self.assertGreaterEqual(len(_VZORY_CACHE), 2)
 
 
 @potrebuje_ffmpeg
