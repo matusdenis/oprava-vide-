@@ -384,6 +384,17 @@ def rychly_verdikt(cesta: str, vzoriek: int = 8) -> dict:
     except (OSError, ValueError) as exc:
         return {**vysledok, "verdikt": "chyba", "poznamka": str(exc)}
     try:
+        # Index sa hľadá PRVÝ. Je to priamy dôkaz, že telo súboru je
+        # neporušené, kým test rovnomernosti je len odhad — a ten sa pri
+        # zázname s vysokým dátovým tokom (4K, H.265) mýli a označí za
+        # zašifrované aj celkom zdravé video. V opačnom poradí sa preto
+        # veľké súbory s prežitým indexom nikdy k tejto vetve nedostali
+        # a triedenie im podsunulo vyrezávanie, ktoré zahodí zvuk.
+        moov = mp4.najdi_moov(mm, size, rychlo=True)
+        if moov is not None:
+            return {**vysledok, "verdikt": "dobre", "postup": "mp4_graft",
+                    "poznamka": "index prežil — obraz aj zvuk"}
+
         blok = 262144
         n = max(1, size // blok)
         krok = max(1, n // max(1, vzoriek))
@@ -411,10 +422,6 @@ def rychly_verdikt(cesta: str, vzoriek: int = 8) -> dict:
             return {**vysledok, "verdikt": "nezachranitelne", "postup": None,
                     "poznamka": f"prekladané šifrovanie — prepísaných "
                                 f"{podiel * 100:.0f} % obsahu"}
-        moov = mp4.najdi_moov(mm, size, rychlo=True)
-        if moov is not None:
-            return {**vysledok, "verdikt": "dobre", "postup": "mp4_graft",
-                    "poznamka": "index prežil — obraz aj zvuk"}
         sync = carve.find_ts_sync(mm, size, search_limit=4 << 20)
         if sync:
             return {**vysledok, "verdikt": "dobre", "postup": "ts_resync",

@@ -468,6 +468,25 @@ class TestVysokyDatovyTok(ZakladVzorky):
         self.assertLess(cervene, len(mapa["body"]) / 2,
                         "neporušená väčšina súboru sa nesmie kresliť ako poškodená")
 
+    def test_velky_subor_s_indexom_dostane_najlepsi_postup(self):
+        """Index sa musí hľadať skôr, než sa uverí štatistike.
+
+        Záznam s vysokým dátovým tokom vyzerá zašifrovane. Keď sa triedenie
+        pýta najprv entropie, k indexu sa nikdy nedostane a veľkému súboru
+        podsunie vyrezávanie — a to zahodí zvuk, hoci sa dal zachrániť celý.
+        """
+        poskodeny = posifruj_zaciatok(self.zdroj, self.out("triedenie.mp4"),
+                                      256 * 1024)
+        povodny = carve.PRAH_CHI2
+        carve.PRAH_CHI2 = 1e9          # všetko bude vyzerať zašifrovane
+        try:
+            v = rychly_verdikt(poskodeny)
+        finally:
+            carve.PRAH_CHI2 = povodny
+        self.assertEqual(v["verdikt"], "dobre")
+        self.assertEqual(v["postup"], "mp4_graft",
+                         "so živým indexom sa nesmie vyrezávať")
+
     def test_zle_meranie_entropie_nezhodi_verdikt(self):
         # naschvál znefunkčníme test rovnomernosti: všetko bude vyzerať šifrovane
         povodny = carve.PRAH_CHI2
