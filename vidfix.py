@@ -223,7 +223,9 @@ def prikaz_kontrola(args) -> int:
         prehlad["plynule" if v["plynule"] else "trha"].append((os.path.basename(cesta), v))
         if v.get("stopa"):
             print(f"  {v['stopa'].strip()}")
-        print(f"  snímkov: {v['snimky']}   trvanie: {v['trvanie']} s   "
+        celkove = v.get("trvanie_celkove")
+        print(f"  snímkov: {v.get('snimkov_v_indexe', v['snimky'])}   "
+              f"trvanie: {celkove if celkove is not None else v['trvanie']} s   "
               f"frekvencia: {v['fps']}/s")
         if not v.get("obraz_overeny"):
             print("  obraz NEOVERENÝ — čítal sa len index. Index popisuje, čo je "
@@ -265,15 +267,14 @@ def prikaz_kontrola(args) -> int:
                   "celé videá prejde --dokladne)")
         vsetky = prehlad["plynule"] + prehlad["trha"]
         if vsetky:
-            minuty = sum(v["trvanie"] for _n, v in vsetky) / 60
+            minuty = sum(v.get("trvanie_celkove") or v["trvanie"]
+                         for _n, v in vsetky) / 60
             trhnuti = sum(v["trhnutia"] for _n, v in vsetky)
-            chyba = sum(v["chybajuce_snimky"] for _n, v in vsetky)
-            snimkov = sum(v["snimky"] for _n, v in vsetky)
+            chyby = sum(v["chyby_dekodovania"] or 0 for _n, v in vsetky)
+            snimkov = sum(v.get("snimkov_v_indexe") or v["snimky"]
+                          for _n, v in vsetky)
             print(f"  spolu {minuty:.1f} minút záznamu, {snimkov} snímkov")
-            print(f"  {trhnuti} trhnutí "
-                  f"({trhnuti / minuty if minuty else 0:.2f} na minútu), "
-                  f"chýba {chyba} snímkov "
-                  f"({100 * chyba / (snimkov + chyba) if snimkov else 0:.3f} %)")
+            print(f"  {trhnuti} trhnutí, {chyby} chýb obrazu")
         # Najprv tie najhorsie - tam sa oplati pozriet
         najhorsie = sorted(prehlad["trha"],
                            key=lambda x: -(x[1]["trhnutia"]

@@ -556,6 +556,10 @@ def skontroluj_vysledok(cesta: str, toolbox, max_snimkov: int = 2000000,
     if index:
         zaklad["stopa"] = f"{index['kodek']} {index['sirka']}×{index['vyska']}"
         zaklad["snimkov_v_indexe"] = len(index["casy"])
+        # Dlzka celeho zaznamu. Pri preverovani vzorkou sa `trvanie` tyka len
+        # preverenych usekov, takze bez tohto by sa v suhrne scitavali vzorky
+        # namiesto materialu.
+        zaklad["trvanie_celkove"] = round(index["casy"][-1] - index["casy"][0], 3)
 
     if rezim == "rychlo":
         if index and len(index["casy"]) >= 2:

@@ -425,7 +425,13 @@ def _do_mp4(ctx: Ctx, raw: str, dst: str, hevc: bool, fps: int) -> dict | None:
     výsledok sa dá otvoriť v akomkoľvek prehrávači, čo je pri záchrane dát
     podstatnejšie než dokonalá kvalita.
     """
-    vstup = ["-r", str(fps), "-f", "hevc" if hevc else "h264", "-i", raw]
+    # `-avoid_negative_ts disabled`: vyrezany stream zacina klucovym snimkom,
+    # ale prve zobrazovacie miesta za nim byvaju prazdne - dekoder ich vyplnit
+    # nema cim. Ffmpeg by casy standardne posunul na nulu, cim by tie prazdne
+    # miesta zapisal do videa ako dieru a prehravac by na nej na zaciatku
+    # zaseknul. Takto sa video jednoducho zacne prvym snimkom, ktory naozaj je.
+    vstup = ["-r", str(fps), "-f", "hevc" if hevc else "h264", "-i", raw,
+             "-avoid_negative_ts", "disabled"]
     res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error"] + vstup
                           + ["-c", "copy", "-movflags", "+faststart", dst], log=None)
     if res["code"] == 0 and os.path.exists(dst) and os.path.getsize(dst) > 65536:
