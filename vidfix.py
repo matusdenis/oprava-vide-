@@ -199,8 +199,8 @@ def prikaz_rozbor(args) -> int:
 def prikaz_kontrola(args) -> int:
     """Zmeria hotové video: beží plynule, alebo v ňom chýbajú snímky?"""
     tb = Toolbox()
-    if not tb.path("ffmpeg"):
-        print("Na kontrolu je potrebný ffmpeg.", file=sys.stderr)
+    if args.dokladne and not tb.path("ffmpeg"):
+        print("Na dôkladnú kontrolu je potrebný ffmpeg.", file=sys.stderr)
         return 2
     zle = 0
     prehlad = {"plynule": [], "trha": [], "chyba": []}
@@ -212,7 +212,7 @@ def prikaz_kontrola(args) -> int:
             continue
         print("\n" + "=" * 66)
         print(os.path.basename(cesta))
-        v = skontroluj_vysledok(cesta, tb)
+        v = skontroluj_vysledok(cesta, tb, dokladne=args.dokladne)
         if not v.get("ok"):
             print(f"  CHYBA: {v.get('chyba')}")
             zle += 1
@@ -223,7 +223,10 @@ def prikaz_kontrola(args) -> int:
             print(f"  {v['stopa'].strip()}")
         print(f"  snímkov: {v['snimky']}   trvanie: {v['trvanie']} s   "
               f"frekvencia: {v['fps']}/s")
-        print(f"  chyby dekódovania: {v['chyby_dekodovania']}")
+        if v.get("chyby_dekodovania") is None:
+            print("  chyby obrazu: nemerané (--dokladne ich spočíta)")
+        else:
+            print(f"  chyby dekódovania: {v['chyby_dekodovania']}")
         if v["plynule"]:
             print("  PLYNULÉ — rozostupy medzi snímkami sú všade rovnaké.")
             if v.get("koniec_mimo_poradia"):
@@ -249,11 +252,12 @@ def prikaz_kontrola(args) -> int:
         # Najprv tie najhorsie - tam sa oplati pozriet
         najhorsie = sorted(prehlad["trha"],
                            key=lambda x: -(x[1]["trhnutia"]
-                                           + x[1]["chyby_dekodovania"]))
+                                           + (x[1]["chyby_dekodovania"] or 0)))
         for nazov, v in najhorsie[:15]:
+            chyby = v["chyby_dekodovania"]
             print(f"  {nazov:40s} {v['trhnutia']} trhnutí, "
-                  f"{v['chyby_dekodovania']} chýb dekódovania, "
-                  f"chýba ~{v['chybajuce_snimky']} snímkov")
+                  + (f"{chyby} chýb dekódovania, " if chyby is not None else "")
+                  + f"chýba ~{v['chybajuce_snimky']} snímkov")
         if len(najhorsie) > 15:
             print(f"  … a ďalších {len(najhorsie) - 15}")
         for nazov, dovod in prehlad["chyba"][:10]:
@@ -365,6 +369,9 @@ def main(argv=None) -> int:
     pk = pod.add_parser("kontrola",
                         help="zmeria hotovy vysledok - plynulost a pocet snimkov")
     pk.add_argument("subor", nargs="+")
+    pk.add_argument("--dokladne", action="store_true",
+                    help="prejst cele video dekoderom - pomalsie, zato spocita "
+                         "aj chyby obrazu (bez toho sa cita len index)")
 
     pu = pod.add_parser("uprac", help="zmaze medzisubory, ku ktorym uz je hotovy vysledok")
     pu.add_argument("priecinok")

@@ -288,6 +288,7 @@ class Track:
     sample_sizes: list = field(default_factory=list)
     stsc: list = field(default_factory=list)     # (first_chunk, samples_per_chunk, desc_idx)
     stts: list = field(default_factory=list)     # (count, delta)
+    ctts: list = field(default_factory=list)     # (count, posun) - poradie zobrazenia
     sample_rate: int = 0
     channels: int = 0
     uniform_sample_size: int = 0
@@ -501,6 +502,21 @@ def parse_tracks(mm, moov: Box, filesize: int) -> list:
                     for i in range(n):
                         off = 8 + 8 * i
                         tr.stts.append(struct.unpack(">II", d[off:off + 8]))
+            # `ctts` posúva čas zobrazenia oproti času dekódovania. Bez neho by
+            # sa pri B-snímkoch poradie javilo ako prehádzané, hoci nie je.
+            ctts = stbl.find(b"ctts")
+            if ctts:
+                d = _read(mm, ctts.data_offset, ctts.data_size)
+                if len(d) >= 8:
+                    verzia = d[0]
+                    n = struct.unpack(">I", d[4:8])[0]
+                    n = min(n, (len(d) - 8) // 8)
+                    for i in range(n):
+                        off = 8 + 8 * i
+                        pocet = struct.unpack(">I", d[off:off + 4])[0]
+                        posun = struct.unpack(">i" if verzia else ">I",
+                                              d[off + 4:off + 8])[0]
+                        tr.ctts.append((pocet, posun))
         tracks.append(tr)
     return tracks
 
@@ -875,6 +891,53 @@ def codec_parameter_sets(path: str, rychlo: bool = False) -> bytes:
                     out.append(b"\x00\x00\x00\x01" + d[pos:pos + n])
                     pos += n
         return b"".join(out)
+    finally:
+        mm.close()
+        f.close()
+
+
+def casy_snimkov(path: str, max_snimkov: int = 2000000) -> dict | None:
+    """Precita z indexu casy zobrazenia jednotlivych snimkov.
+
+    Nedotyka sa samotneho obrazu, takze aj sestgigabajtovy zaznam je hotovy za
+    zlomok sekundy - oproti dekodovaniu, ktore trva minuty na subor.
+
+    Vracia {'casy': [...sekundy...], 'timescale': ...} alebo None, ked index
+    pouzitelny nie je.
+    """
+    try:
+        f, mm, size = open_mm(path)
+    except OSError:
+        return None
+    try:
+        moov = najdi_moov(mm, size, rychlo=True)
+        if moov is None:
+            return None
+        moov.children = parse_tree(mm, moov.data_offset, moov.end, size)
+        for tr in parse_tracks(mm, moov, size):
+            if tr.handler != "vide" or not tr.stts or tr.timescale <= 0:
+                continue
+            dekod = []
+            cas = 0
+            for pocet, delta in tr.stts:
+                for _ in range(min(pocet, max_snimkov - len(dekod))):
+                    dekod.append(cas)
+                    cas += delta
+                if len(dekod) >= max_snimkov:
+                    break
+            if not dekod:
+                continue
+            posuny = []
+            for pocet, posun in tr.ctts:
+                posuny += [posun] * min(pocet, len(dekod) - len(posuny))
+                if len(posuny) >= len(dekod):
+                    break
+            posuny += [0] * (len(dekod) - len(posuny))
+            zobrazenie = sorted(d + p for d, p in zip(dekod, posuny))
+            return {"casy": [t / tr.timescale for t in zobrazenie],
+                    "timescale": tr.timescale, "sirka": tr.width,
+                    "vyska": tr.height, "kodek": tr.codec}
+        return None
     finally:
         mm.close()
         f.close()

@@ -580,6 +580,40 @@ class TestKontrolaVysledku(unittest.TestCase):
         v = skontroluj_vysledok(os.path.join(self.dir, "niet.mp4"), TB)
         self.assertFalse(v["ok"])
 
+    def test_cita_sa_index_nie_obraz(self):
+        """Rýchla kontrola sa nesmie dotknúť samotného videa.
+
+        Pri šesťgigabajtových záznamoch je rozdiel medzi prečítaním indexu
+        a prejdením celého obrazu rozdiel medzi sekundou a hodinami.
+        """
+        volane = []
+        povodny = TB.path
+
+        def bez_ffmpeg(meno):
+            volane.append(meno)
+            return None if meno == "ffmpeg" else povodny(meno)
+
+        TB.path = bez_ffmpeg
+        try:
+            v = skontroluj_vysledok(self.zdravy, TB)
+        finally:
+            TB.path = povodny
+        self.assertTrue(v["ok"], "index má stačiť aj bez ffmpeg")
+        self.assertTrue(v["plynule"])
+        self.assertIsNone(v["chyby_dekodovania"])
+
+    def test_dokladna_kontrola_pocita_chyby(self):
+        v = skontroluj_vysledok(self.zdravy, TB, dokladne=True)
+        self.assertTrue(v["ok"])
+        self.assertEqual(v["chyby_dekodovania"], 0)
+        self.assertTrue(v["plynule"])
+
+    def test_obe_cesty_daju_rovnaku_frekvenciu(self):
+        rychla = skontroluj_vysledok(self.zdravy, TB)
+        dokladna = skontroluj_vysledok(self.zdravy, TB, dokladne=True)
+        self.assertAlmostEqual(rychla["fps"], dokladna["fps"], delta=0.1)
+        self.assertEqual(rychla["plynule"], dokladna["plynule"])
+
 
 @potrebuje_ffmpeg
 class TestSnimkovaFrekvencia(unittest.TestCase):

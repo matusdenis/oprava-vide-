@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import struct
 
 from . import carve, mp4
 from .util import hexdump, human
@@ -487,30 +488,86 @@ def rozbor(path: str, db, toolbox=None, log=print) -> dict:
 # Kontrola hotoveho vysledku
 # ---------------------------------------------------------------------------
 
-def skontroluj_vysledok(cesta: str, toolbox, max_snimkov: int = 200000) -> dict:
-    """Zmeria hotove video: plynulost, pocet snimkov, chyby dekodovania.
+def _plynulost(casy: list) -> dict:
+    """Z casov zobrazenia vyrata frekvenciu, trhnutia a chybajuce snimky."""
+    from collections import Counter
+
+    out = {"snimky": len(casy)}
+    if len(casy) < 2:
+        return {**out, "ok": False,
+                "chyba": "z videa sa nepodarilo prečítať ani dva snímky"}
+    rozostupy = [round(casy[i + 1] - casy[i], 5) for i in range(len(casy) - 1)]
+    bezny = Counter(rozostupy).most_common(1)[0][0]
+    out["trvanie"] = round(casy[-1] - casy[0], 3)
+    out["fps"] = round(1 / bezny, 3) if bezny > 0 else None
+    out["bezny_rozostup"] = bezny
+    # Za trhnutie sa berie rozostup, ktory sa od bezneho lisi o viac nez
+    # polovicu snimku - kratsie odchylky su len zaokruhlenie casovej zakladne.
+    tolerancia = max(bezny * 0.5, 0.001)
+    vsetky = [(i, x) for i, x in enumerate(rozostupy)
+              if abs(x - bezny) > tolerancia]
+    # Zaznam useknuty uprostred skupiny snimkov necha na konci jeden snimok
+    # mimo poradia - vyriesit sa to nedá a v prehravaci to nie je vidiet.
+    hranica = len(rozostupy) - 2
+    trhnutia = [(i, x) for i, x in vsetky if i < hranica]
+    out["koniec_mimo_poradia"] = len(vsetky) - len(trhnutia)
+    out["trhnutia"] = len(trhnutia)
+    out["kde_trha"] = [{"snimok": i + 1, "sekunda": round(casy[i], 3),
+                        "rozostup": x} for i, x in trhnutia[:20]]
+    ocakavane = int(round(out["trvanie"] / bezny)) + 1 if bezny > 0 else len(casy)
+    out["chybajuce_snimky"] = max(0, ocakavane - len(casy))
+    out["plynule"] = not trhnutia and out["chybajuce_snimky"] == 0
+    return {**out, "ok": True}
+
+
+def skontroluj_vysledok(cesta: str, toolbox, max_snimkov: int = 2000000,
+                        dokladne: bool = False) -> dict:
+    """Zmeria hotove video: plynulost, pocet snimkov, pripadne chyby dekodovania.
 
     Vyrezany stream ziadne casovanie neobsahuje, takze sa mu priradi az pri
-    balení do MP4. Ked sedi, su rozostupy medzi snimkami vsade rovnake. Ked
+    baleni do MP4. Ked sedi, su rozostupy medzi snimkami vsade rovnake. Ked
     nie, alebo ked v strede chybaju snimky, prehravac to ukaze ako sekanie -
     a prave to sa tu da zmerat.
+
+    Casy sa citaju z indexu hotoveho suboru, takze sa obraz vobec nedekoduje:
+    na sestgigabajtovom zazname je to zlomok sekundy namiesto minut. Chyby
+    dekodovania sa takto zistit nedaju - na to je `dokladne=True`, ktore video
+    naozaj prejde.
     """
+    if not os.path.isfile(cesta):
+        return {"ok": False, "chyba": "súbor neexistuje"}
+    zaklad = {"subor": os.path.basename(cesta)}
+
+    if not dokladne:
+        try:
+            index = mp4.casy_snimkov(cesta, max_snimkov=max_snimkov)
+        except (OSError, ValueError, struct.error):
+            index = None
+        if index and len(index["casy"]) >= 2:
+            v = _plynulost(index["casy"])
+            popis = f"{index['kodek']} {index['sirka']}×{index['vyska']}"
+            return {**zaklad, **v, "stopa": popis.strip(),
+                    "chyby_dekodovania": None, "ukazky_chyb": []}
+        # Bez pouzitelneho indexu neostava ine, nez subor prejst.
+
+    return _skontroluj_dekodovanim(cesta, toolbox, max_snimkov, zaklad)
+
+
+def _skontroluj_dekodovanim(cesta: str, toolbox, max_snimkov: int,
+                            zaklad: dict) -> dict:
+    """Prejde cele video dekoderom - pomalsie, zato spocita aj chyby obrazu."""
     import subprocess
-    from collections import Counter
 
     ffmpeg = toolbox.path("ffmpeg")
     if not ffmpeg:
-        return {"ok": False, "chyba": "ffmpeg nie je k dispozícii"}
-    if not os.path.isfile(cesta):
-        return {"ok": False, "chyba": "súbor neexistuje"}
-
+        return {**zaklad, "ok": False, "chyba": "ffmpeg nie je k dispozícii"}
     try:
         r = subprocess.run([ffmpeg, "-v", "info", "-i", cesta,
                             "-vf", "showinfo", "-f", "null", "-"],
                            capture_output=True, text=True, errors="replace",
-                           timeout=3600)
+                           timeout=7200)
     except Exception as exc:                      # noqa: BLE001
-        return {"ok": False, "chyba": str(exc)}
+        return {**zaklad, "ok": False, "chyba": str(exc)}
 
     vystup = r.stderr or r.stdout or ""
     casy = []
@@ -518,15 +575,14 @@ def skontroluj_vysledok(cesta: str, toolbox, max_snimkov: int = 200000) -> dict:
         i = riadok.find("pts_time:")
         if i < 0:
             continue
-        kus = riadok[i + 9:].split()[0]
         try:
-            casy.append(float(kus))
+            casy.append(float(riadok[i + 9:].split()[0]))
         except ValueError:
             continue
         if len(casy) >= max_snimkov:
             break
 
-    out = {"ok": True, "subor": os.path.basename(cesta), "snimky": len(casy)}
+    out = dict(zaklad)
     for riadok in vystup.splitlines():
         if "Video:" in riadok and "Stream" in riadok:
             out["stopa"] = riadok.strip()
@@ -535,33 +591,4 @@ def skontroluj_vysledok(cesta: str, toolbox, max_snimkov: int = 200000) -> dict:
              if "error" in l.lower() or "Invalid" in l or "corrupt" in l.lower()]
     out["chyby_dekodovania"] = len(chyby)
     out["ukazky_chyb"] = chyby[:5]
-
-    if len(casy) < 2:
-        out["ok"] = False
-        out["chyba"] = "z videa sa nepodarilo prečítať ani dva snímky"
-        return out
-
-    rozostupy = [round(casy[i + 1] - casy[i], 5) for i in range(len(casy) - 1)]
-    bezny = Counter(rozostupy).most_common(1)[0][0]
-    out["trvanie"] = round(casy[-1] - casy[0], 3)
-    out["fps"] = round(1 / bezny, 3) if bezny > 0 else None
-    # Za trhnutie sa berie rozostup, ktory sa od bezneho lisi o viac nez
-    # polovicu snimku - kratsie odchylky su len zaokruhlenie casovej zakladne.
-    tolerancia = max(bezny * 0.5, 0.001)
-    vsetky = [(i, x) for i, x in enumerate(rozostupy)
-              if abs(x - bezny) > tolerancia]
-    # Zaznam useknuty uprostred skupiny snimkov necha na konci jeden snimok
-    # mimo poradia - vyriesit sa to nedá a v prehravaci to nie je vidiet.
-    # Do trhania sa preto nepocita, len sa spomenie osobitne.
-    hranica = len(rozostupy) - 2
-    trhnutia = [(i, x) for i, x in vsetky if i < hranica]
-    out["koniec_mimo_poradia"] = len(vsetky) - len(trhnutia)
-    out["bezny_rozostup"] = bezny
-    out["trhnutia"] = len(trhnutia)
-    out["kde_trha"] = [{"snimok": i + 1, "sekunda": round(casy[i], 3),
-                        "rozostup": x} for i, x in trhnutia[:20]]
-    # Kolko snimkov by pri tejto frekvencii malo byt, keby sa nic nestratilo
-    ocakavane = int(round(out["trvanie"] / bezny)) + 1 if bezny > 0 else len(casy)
-    out["chybajuce_snimky"] = max(0, ocakavane - len(casy))
-    out["plynule"] = not trhnutia and out["chybajuce_snimky"] == 0
-    return out
+    return {**out, **_plynulost(sorted(casy))}
