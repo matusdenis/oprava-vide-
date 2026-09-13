@@ -443,11 +443,14 @@ function vykresliAnalyzu(a) {
         return `<div class="${b.sifrovane ? "sifrovane" : ""}" style="height:${v}%"
           title="${bajty(b.offset)} · ${b.sifrovane ? "zašifrované" : "pôvodné dáta"} (chí² ${b.chi2})"></div>`;
       }).join("") + `</div>
-      <div class="legenda"><span><i style="background:var(--zle)"></i>zašifrované
+      <div class="legenda"><span><i style="background:var(--zle)"></i>${
+          mapa.podla_indexu ? "poškodené" : "zašifrované"}
         (${Math.round((mapa.podiel || 0) * 100)} % súboru)</span>
-        <span><i style="background:var(--akcent)"></i>pôvodné dáta</span></div>`
+        <span><i style="background:var(--akcent)"></i>${
+          mapa.podla_indexu ? "neporušené dáta" : "pôvodné dáta"}</span></div>`
       + (mapa.poznamka
-        ? `<p class="popis" style="margin:10px 0 0"><b>Pozor na tento graf:</b>
+        ? `<p class="popis" style="margin:10px 0 0"><b>${
+             mapa.podla_indexu ? "Podľa čoho je graf" : "Pozor na tento graf"}:</b>
            ${esc(mapa.poznamka)}</p>` : "")
       + `</div>`;
   }

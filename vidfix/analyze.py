@@ -136,12 +136,52 @@ def analyze(path: str, db, toolbox=None, log=None) -> dict:
         if rep["mapa_sifrovania"].get("podiel", 0) > 0.55:
             rep["mapa_sifrovania"]["obraz_v_tele"] = _je_v_tele_video(mm, size)
         _uprav_mapu_podla_struktury(rep)
+        _prekresli_mapu_podla_indexu(rep)
     finally:
         mm.close()
         f.close()
 
     rep["strategie"] = navrhni_strategie(rep)
     return rep
+
+
+def _prekresli_mapu_podla_indexu(rep: dict) -> None:
+    """Namiesto odhadu ukáže v mape to, čo o súbore vie jeho vlastný index.
+
+    Farba v grafe vychádzala z testu rovnomernosti dát. Ten ale pri zázname
+    s vysokým dátovým tokom (4K, H.265) označí za zašifrované aj neporušené
+    video, takže graf svietil celý načerveno aj pri súbore, kde bol poškodený
+    jediný úsek z takmer štyroch tisíc.
+
+    Keď index prežil, tabuľky vzoriek povedia presne, ktoré úseky sú pokazené -
+    a to je dôkaz, nie odhad. Hodnota chí² v popisku ostáva pre informáciu.
+    """
+    mapa = rep.get("mapa_sifrovania") or {}
+    d = rep.get("detail") or {}
+    if not mapa.get("body") or not d.get("index_moov"):
+        return
+    pm = d.get("mapa_poskodenia") or {}
+    if not pm.get("checked"):
+        return
+
+    useky = [tuple(r) for r in (pm.get("ranges") or []) if len(r) == 2]
+    koniec = (d.get("poskodenie") or {}).get("damage_end")
+    if koniec:
+        useky.append((0, koniec))
+    for b in mapa["body"]:
+        b["sifrovane"] = any(a <= b["offset"] < c for a, c in useky)
+    mapa["podla_indexu"] = True
+    sifrovanych = sum(1 for b in mapa["body"] if b["sifrovane"])
+    mapa["podiel"] = round(sifrovanych / len(mapa["body"]), 4)
+    mapa["cely_subor"] = False
+    mapa["prve_povodne"] = next((b["offset"] for b in mapa["body"]
+                                 if not b["sifrovane"]), None)
+    mapa["poznamka"] = (
+        f"Mapa je zostavená z indexu súboru, nie z odhadu: z {pm['checked']} "
+        f"preverených úsekov je poškodených {pm.get('bad', 0)}. Test "
+        f"rovnomernosti dát (hodnota chí² v popiskoch) pri zázname s vysokým "
+        f"dátovým tokom označí za zašifrované aj neporušené video."
+    )
 
 
 def _uprav_mapu_podla_struktury(rep: dict) -> None:

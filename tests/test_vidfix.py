@@ -451,6 +451,23 @@ class TestVysokyDatovyTok(ZakladVzorky):
         self.assertTrue(mapa.get("poznamka"), "dôvod sa má používateľovi povedať")
         self.assertEqual(rep["strategie"][0]["id"], "mp4_graft")
 
+    def test_mapa_sa_kresli_podla_indexu(self):
+        """Graf má ukazovať skutočné poškodenie, nie odhad z entropie."""
+        poskodeny = posifruj_zaciatok(self.zdroj, self.out("mapa_index.mp4"),
+                                      256 * 1024)
+        povodny = carve.PRAH_CHI2
+        carve.PRAH_CHI2 = 1e9          # všetko bude vyzerať zašifrovane
+        try:
+            rep = analyze(poskodeny, HeaderDB(), TB)
+        finally:
+            carve.PRAH_CHI2 = povodny
+        mapa = rep["mapa_sifrovania"]
+        self.assertTrue(mapa.get("podla_indexu"))
+        cervene = sum(1 for b in mapa["body"] if b["sifrovane"])
+        self.assertGreater(cervene, 0, "poškodený začiatok sa má ukázať")
+        self.assertLess(cervene, len(mapa["body"]) / 2,
+                        "neporušená väčšina súboru sa nesmie kresliť ako poškodená")
+
     def test_zle_meranie_entropie_nezhodi_verdikt(self):
         # naschvál znefunkčníme test rovnomernosti: všetko bude vyzerať šifrovane
         povodny = carve.PRAH_CHI2
