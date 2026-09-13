@@ -429,6 +429,28 @@ class TestVysokyDatovyTok(ZakladVzorky):
                 f.close()
             os.remove(nahodny)
 
+    def test_prezity_index_prebije_statistiku(self):
+        """Index je dôkaz, test rovnomernosti len odhad — a ten sa mýli.
+
+        Záznam s vysokým dátovým tokom vyzerá rovnako náhodne ako šifrovaný.
+        Keď index prežil, súbor sa nesmie vyhlásiť za zašifrovaný celý — inak
+        rozhranie pošle preč aj video, z ktorého sa dá obnoviť všetko.
+        """
+        poskodeny = posifruj_zaciatok(self.zdroj, self.out("entropia.mp4"),
+                                      256 * 1024)
+        povodny = carve.PRAH_CHI2
+        carve.PRAH_CHI2 = 1e9          # všetko bude vyzerať zašifrovane
+        try:
+            rep = analyze(poskodeny, HeaderDB(), TB)
+        finally:
+            carve.PRAH_CHI2 = povodny
+        self.assertTrue(rep["detail"].get("index_moov"), "index mal prežiť")
+        mapa = rep["mapa_sifrovania"]
+        self.assertFalse(mapa["cely_subor"],
+                         "so živým indexom sa súbor nesmie označiť za stratený")
+        self.assertTrue(mapa.get("poznamka"), "dôvod sa má používateľovi povedať")
+        self.assertEqual(rep["strategie"][0]["id"], "mp4_graft")
+
     def test_zle_meranie_entropie_nezhodi_verdikt(self):
         # naschvál znefunkčníme test rovnomernosti: všetko bude vyzerať šifrovane
         povodny = carve.PRAH_CHI2

@@ -445,7 +445,11 @@ function vykresliAnalyzu(a) {
       }).join("") + `</div>
       <div class="legenda"><span><i style="background:var(--zle)"></i>zašifrované
         (${Math.round((mapa.podiel || 0) * 100)} % súboru)</span>
-        <span><i style="background:var(--akcent)"></i>pôvodné dáta</span></div></div>`;
+        <span><i style="background:var(--akcent)"></i>pôvodné dáta</span></div>`
+      + (mapa.poznamka
+        ? `<p class="popis" style="margin:10px 0 0"><b>Pozor na tento graf:</b>
+           ${esc(mapa.poznamka)}</p>` : "")
+      + `</div>`;
   }
 
   html += `<details class="karta"><summary>Prvých 160 bajtov súboru</summary>

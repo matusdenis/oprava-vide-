@@ -135,12 +135,43 @@ def analyze(path: str, db, toolbox=None, log=None) -> dict:
         # s vysokým dátovým tokom sa od šifrovaných dát štatisticky nelíši.
         if rep["mapa_sifrovania"].get("podiel", 0) > 0.55:
             rep["mapa_sifrovania"]["obraz_v_tele"] = _je_v_tele_video(mm, size)
+        _uprav_mapu_podla_struktury(rep)
     finally:
         mm.close()
         f.close()
 
     rep["strategie"] = navrhni_strategie(rep)
     return rep
+
+
+def _uprav_mapu_podla_struktury(rep: dict) -> None:
+    """Nepustí štatistiku pred dôkaz zo štruktúry súboru.
+
+    Test rovnomernosti dát je len odhad a pri zázname s vysokým dátovým tokom
+    (4K, H.265) sa mýli - neporušené video vyzerá rovnako náhodne ako šifrované.
+    Keď index `moov` prežil a tabuľky vzoriek ukazujú na neporušené dáta, je to
+    priamy dôkaz, že súbor zašifrovaný celý NIE JE. Bez tejto poistky rozhranie
+    vyhlásilo za stratený aj súbor, z ktorého sa dalo obnoviť všetko.
+    """
+    mapa = rep.get("mapa_sifrovania")
+    if not mapa or not mapa.get("cely_subor"):
+        return
+    d = rep.get("detail") or {}
+    if not d.get("index_moov"):
+        return
+    poskodenie = d.get("mapa_poskodenia") or {}
+    zlych = poskodenie.get("bad")
+    vsetkych = poskodenie.get("checked") or poskodenie.get("total")
+    # Index sam o sebe staci; ked je k dispozicii aj mapa useku, pouzije sa.
+    if vsetkych and zlych is not None and zlych >= vsetkych:
+        return
+    mapa["cely_subor"] = False
+    mapa["prepisane_struckturou"] = True
+    mapa["poznamka"] = (
+        "Test rovnomernosti dát označil obsah za zašifrovaný, ale index súboru "
+        "prežil a ukazuje na neporušené dáta. Pri zázname s vysokým dátovým "
+        "tokom sa tento test mýli — rozhoduje štruktúra."
+    )
 
 
 def navrhni_strategie(rep: dict) -> list:
