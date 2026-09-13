@@ -157,7 +157,7 @@ def navrhni_strategie(rep: dict) -> list:
     ma_index = bool(d.get("index_moov"))
     if not ma_index and not mapa.get("obraz_v_tele") \
             and (mapa.get("cely_subor") or mapa.get("podiel", 0) > 0.55):
-        return [{
+        stratene = [{
             "id": "nezachranitelne",
             "nazov": "Tento súbor sa zachrániť nedá",
             "vhodnost": "žiadna",
@@ -173,6 +173,9 @@ def navrhni_strategie(rep: dict) -> list:
                                    "vyhľadať na nomoreransom.org — pre niektoré rodiny "
                                    "ransomvéru existuje bezplatný dešifrovač."),
         }]
+        # Verdikt ostáva prvý, takže dávka tento súbor naďalej preskočí. Kto to
+        # chce skúsiť aj tak, má postupy k dispozícii.
+        return stratene + _ostatne_postupy(stratene)
 
     if typ == "mpegts" and d.get("synchronizacia"):
         out.append({
@@ -227,7 +230,41 @@ def navrhni_strategie(rep: dict) -> list:
         "popis": ("Najprv sa oplatí skúsiť, či súbor nedokáže prečítať samotný ffmpeg. "
                   "Trvá pár sekúnd a nič nepokazí."),
         "ocakavany_vysledok": "Funguje len pri ľahkom poškodení."})
-    return out
+    return out + _ostatne_postupy(out)
+
+
+# Postupy, ktoré sa pre daný súbor neodporúčajú, ale vyskúšať sa dajú. Rozbor
+# sa môže mýliť — typ súboru sa určuje z jeho obsahu, a ten býva poškodený —
+# takže posledné slovo má mať používateľ, nie program.
+VSETKY_POSTUPY = {
+    "ts_resync": ("Znovunájdenie tokových paketov (MPEG-TS)",
+                  "Hľadá pravidelný sled paketov po 188 alebo 192 bajtoch. "
+                  "Má zmysel pri formátoch MTS, M2TS a AVCHD z videokamier.",
+                  "Video aj zvuk okrem zašifrovaného začiatku."),
+    "mp4_graft": ("Nahradenie hlavičky (index moov prežil)",
+                  "Potrebuje neporušený index na konci súboru. Ak sa ho podarí "
+                  "nájsť, je to najlepší možný výsledok.",
+                  "Celé video aj zvuk okrem zašifrovaného začiatku."),
+    "mp4_carve": ("Vyrezanie obrazu a rekonštrukcia parametrov",
+                  "Vyreže obrazové dáta priamo z tela súboru a parametre nájde "
+                  "skúšaním. Funguje aj tam, kde z indexu neostalo nič.",
+                  "Obraz bez zvuku."),
+    "untrunc": ("untrunc so vzorovým súborom",
+                "Dopočíta index podľa zdravého súboru z rovnakého zariadenia.",
+                "Video aj zvuk, ak vzor sedí s pôvodným nastavením."),
+    "ffmpeg_remux": ("Priamy pokus o prečítanie cez ffmpeg",
+                     "Skúsi súbor jednoducho prebaliť. Trvá pár sekúnd.",
+                     "Funguje len pri ľahkom poškodení."),
+}
+
+
+def _ostatne_postupy(uz_navrhnute: list) -> list:
+    """Doplni postupy, ktore navrhnute neboli, oznacene ako neodporucane."""
+    mam = {s["id"] for s in uz_navrhnute}
+    return [{"id": pid, "nazov": nazov, "vhodnost": "neodporúča sa pre tento súbor",
+             "popis": popis, "ocakavany_vysledok": vysledok, "nevhodny": True}
+            for pid, (nazov, popis, vysledok) in VSETKY_POSTUPY.items()
+            if pid not in mam]
 
 
 def _je_v_tele_video(mm, size: int, sond: int = 3, okno: int = 3 << 20) -> bool:

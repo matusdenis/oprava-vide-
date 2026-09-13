@@ -462,15 +462,31 @@ function pripravOpravu(a) {
   const strategie = a.strategie || [];
   let html = `<p class="popis">Vyber postup. Poradie je zoradené od najlepšie
     vyhovujúceho pre tento konkrétny súbor.</p>`;
-  strategie.forEach((s, i) => {
-    const trieda = s.vhodnost.startsWith("vyborn") ? "dobra"
-      : (s.vhodnost.startsWith("stredn") ? "pozor" : "");
-    html += `<div class="strategia ${i === 0 ? "vybrana" : ""}" data-id="${esc(s.id)}">
+  const kartu = (s, vybrana) => {
+    const trieda = s.nevhodny ? "zla"
+      : (s.vhodnost.startsWith("vyborn") ? "dobra"
+        : (s.vhodnost.startsWith("stredn") ? "pozor" : ""));
+    return `<div class="strategia ${vybrana ? "vybrana" : ""}" data-id="${esc(s.id)}">
       <h4>${esc(s.nazov)} <span class="znacka ${trieda}">${esc(s.vhodnost)}</span></h4>
       <p>${esc(s.popis)}</p>
       <p><b>Očakávaný výsledok:</b> ${esc(s.ocakavany_vysledok)}</p></div>`;
-  });
-  stavAplikacie.strategia = strategie.length ? strategie[0].id : null;
+  };
+  const odporucane = strategie.filter(s => !s.nevhodny);
+  const ostatne = strategie.filter(s => s.nevhodny);
+  odporucane.forEach((s, i) => { html += kartu(s, i === 0); });
+  // Rozbor sa môže mýliť — typ súboru sa určuje z jeho obsahu a ten býva
+  // poškodený. Ostatné postupy preto ostávajú po ruke, len sú odložené bokom.
+  if (ostatne.length) {
+    html += `<details class="karta" style="padding:10px 14px">
+      <summary style="cursor:pointer">Ďalšie postupy (${ostatne.length}) —
+        pre tento súbor sa neodporúčajú, ale skúsiť sa dajú</summary>
+      <p class="popis" style="margin:10px 0 4px">Typ súboru sa určuje z jeho
+        obsahu, a ten je poškodený — rozbor sa teda môže mýliť. Ak si si istý,
+        čo to za súbor je, vyber postup sám.</p>
+      ${ostatne.map(s => kartu(s, false)).join("")}</details>`;
+  }
+  stavAplikacie.strategia = odporucane.length ? odporucane[0].id
+    : (strategie.length ? strategie[0].id : null);
 
   html += `<div class="karta" id="kartaVystupu"><h3 style="margin-top:0">Kam uložiť výsledok</h3>
     <div class="riadok">
@@ -482,6 +498,8 @@ function pripravOpravu(a) {
     <p class="popis" id="stavVystupu" style="margin:6px 0 0"></p></div>
 
     <div class="karta"><h3 style="margin-top:0">Voliteľné nastavenia</h3>
+    <p class="popis" id="ziadneVolby" hidden>Tento postup sa nastavovať nedá —
+      všetko potrebné si zistí zo súboru sám.</p>
     <div class="volby">
       <div class="volba siroka" data-volba="rozlisenie"><label>Rozlíšenie pôvodného videa
         (ak ho poznáš — hľadanie parametrov sa tým rádovo zrýchli)</label>
@@ -516,6 +534,12 @@ function pripravOpravu(a) {
           videách sa oplatí nechať len jednu, dve zaberú dvojnásobok miesta.</p></div>
       <div class="volba" data-volba="hladanie"><label><input type="checkbox" id="volbaRychle" checked>
         Rýchle hľadanie parametrov (menej kombinácií)</label></div>
+      <div class="volba siroka" data-volba="medzisubory">
+        <label><input type="checkbox" id="volbaMedzisubory">
+        Ponechať medzisúbory</label>
+        <p class="popis" style="margin:6px 0 0">Surový obrazový stream, z ktorého
+          sa výsledok skladá. Bežne sa po dokončení zmaže — zaberá toľko miesta
+          ako samotné video. Nechaj ho, len ak s ním chceš ďalej pracovať.</p></div>
     </div>
     <button id="btnSpustit">Spustiť opravu</button>
     <p class="popis" id="poznamkaSpustit" style="margin:8px 0 0"></p></div>
@@ -608,6 +632,10 @@ function zobrazVolby() {
   document.querySelectorAll("[data-volba]").forEach(v => {
     v.hidden = !pouzite.includes(v.dataset.volba);
   });
+  // Karta bez jediného nastavenia pôsobí ako chyba rozhrania - radšej sa
+  // rovno povie, že tento postup sa nastavovať nedá.
+  const ziadne = document.getElementById("ziadneVolby");
+  if (ziadne) ziadne.hidden = pouzite.length > 0;
   const karta = document.querySelector("[data-volba]")?.closest(".karta");
   if (karta) karta.hidden = pouzite.length === 0;
   aktualizujSpustit();
