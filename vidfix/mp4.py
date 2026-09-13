@@ -780,6 +780,21 @@ def damage_map(mm, track, struct_start: int, max_checks: int = 4000, hevc: bool 
     }
 
 
+def moov_od_zaciatku(mm, size: int):
+    """Najde `moov` normalnou cestou - prechodom retazca boxov od zaciatku.
+
+    Pre neposkodeny subor je to sprava vec a stoji takmer nic: citaju sa len
+    hlavicky boxov, nie ich obsah. Vysledky tohto programu maju `moov` hned na
+    zaciatku (faststart), takze hladanie na konci suboru by ho minulo - a pri
+    sestgigabajtovom zazname by sa potom muselo siahnut po dekodovani.
+    """
+    boxy, _koniec = chain_from(mm, 0, size)
+    for b in boxy:
+        if b.type == b"moov" and not getattr(b, "truncated", False):
+            return b
+    return None
+
+
 def najdi_moov(mm, size: int, chvost: int = 256 << 20, rychlo: bool = False):
     """Najde index `moov`. Hlada od konca suboru, po stale vacsich krokoch.
 
@@ -910,7 +925,7 @@ def casy_snimkov(path: str, max_snimkov: int = 2000000) -> dict | None:
     except OSError:
         return None
     try:
-        moov = najdi_moov(mm, size, rychlo=True)
+        moov = moov_od_zaciatku(mm, size) or najdi_moov(mm, size, rychlo=True)
         if moov is None:
             return None
         moov.children = parse_tree(mm, moov.data_offset, moov.end, size)
@@ -958,7 +973,7 @@ def snimkova_frekvencia(path: str) -> float | None:
     except OSError:
         return None
     try:
-        moov = najdi_moov(mm, size)
+        moov = moov_od_zaciatku(mm, size) or najdi_moov(mm, size)
         if moov is None:
             return None
         moov.children = parse_tree(mm, moov.data_offset, moov.end, size)

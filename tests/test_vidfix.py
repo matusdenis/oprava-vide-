@@ -580,6 +580,23 @@ class TestKontrolaVysledku(unittest.TestCase):
         v = skontroluj_vysledok(os.path.join(self.dir, "niet.mp4"), TB)
         self.assertFalse(v["ok"])
 
+    def test_index_na_zaciatku_sa_najde_aj_vo_velkom_subore(self):
+        """Výsledky programu majú index na začiatku (faststart).
+
+        Hľadanie len na konci súboru by ho pri veľkom zázname minulo a kontrola
+        by musela siahnuť po dekódovaní — teda po hodinách namiesto sekundy.
+        """
+        velky = os.path.join(self.dir, "velky.mp4")
+        shutil.copy(self.zdravy, velky)
+        # doplnenie platným výplňovým boxom tak, aby index bol ďaleko od konca
+        with open(velky, "ab") as f:
+            n = 64 << 20
+            f.write(n.to_bytes(4, "big") + b"free")
+            f.write(b"\0" * (n - 8))
+        r = mp4.casy_snimkov(velky)
+        self.assertIsNotNone(r, "index na začiatku sa mal nájsť")
+        self.assertGreater(len(r["casy"]), 10)
+
     def test_cita_sa_index_nie_obraz(self):
         """Rýchla kontrola sa nesmie dotknúť samotného videa.
 
