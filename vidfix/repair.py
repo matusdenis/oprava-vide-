@@ -647,12 +647,19 @@ def strategia_ts_resync(ctx: Ctx) -> dict:
                         fo.write(ps)
                         fo.write(telo)
                 vystupy.append({"cesta": es, "popis": "Surový obrazový stream z TS"})
-                res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error", "-f", "h264",
+                # Surovy stream casovanie neobsahuje. Bez udania frekvencie by
+                # ffmpeg dosadil 25/s a zaznam z kamery so 50p by bezal na
+                # polovicnu rychlost.
+                fps = zisti_fps(ctx)
+                res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error", "-r", str(fps),
+                                                 "-f", "h264",
                                                  "-i", es, "-c", "copy",
+                                                 "-avoid_negative_ts", "disabled",
                                                  "-movflags", "+faststart", remux],
                                       log=None)
                 if res["code"] == 0 and os.path.exists(remux) and os.path.getsize(remux) > 1024:
-                    vystupy.append({"cesta": remux, "popis": "Zachránené video (bez zvuku)"})
+                    vystupy.append({"cesta": remux,
+                                    "popis": f"Zachránené video ({fps} snímkov/s, bez zvuku)"})
                 elif os.path.exists(remux):
                     os.remove(remux)
         if not any(v["cesta"].endswith(".mp4") for v in vystupy):
