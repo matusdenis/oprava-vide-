@@ -517,6 +517,13 @@ def _plynulost(casy: list) -> dict:
     ocakavane = int(round(out["trvanie"] / bezny)) + 1 if bezny > 0 else len(casy)
     out["chybajuce_snimky"] = max(0, ocakavane - len(casy))
     out["plynule"] = not trhnutia and out["chybajuce_snimky"] == 0
+    # Samotny pocet trhnuti sa medzi roznymi zaznamami porovnavat neda:
+    # dve trhnutia v sestsekundovom klipe su nieco uplne ine nez dve
+    # v devätnastminutovom. Porovnatelna je az hustota.
+    minuty = out["trvanie"] / 60 if out["trvanie"] > 0 else 0
+    out["trhnutia_za_minutu"] = round(out["trhnutia"] / minuty, 2) if minuty else None
+    out["podiel_chybajucich"] = (round(out["chybajuce_snimky"] / ocakavane, 5)
+                                 if ocakavane else 0.0)
     return {**out, "ok": True}
 
 

@@ -233,8 +233,10 @@ def prikaz_kontrola(args) -> int:
                 print("  (posledný snímok je mimo poradia — záznam je useknutý "
                       "uprostred skupiny snímkov; v prehrávači to vidieť nie je)")
         else:
-            print(f"  TRHÁ SA: {v['trhnutia']} nepravidelných rozostupov, "
-                  f"chýbajúcich snímkov približne {v['chybajuce_snimky']}")
+            print(f"  TRHÁ SA: {v['trhnutia']} nepravidelných rozostupov "
+                  f"({v['trhnutia_za_minutu']} na minútu), chýbajúcich snímkov "
+                  f"približne {v['chybajuce_snimky']} "
+                  f"({v['podiel_chybajucich'] * 100:.2f} %)")
             for t in v["kde_trha"][:10]:
                 print(f"    snímok {t['snimok']} (sekunda {t['sekunda']}): "
                       f"rozostup {t['rozostup']} namiesto {v['bezny_rozostup']}")
@@ -249,6 +251,17 @@ def prikaz_kontrola(args) -> int:
         print(f"SÚHRN: {spolu} súborov — {len(prehlad['plynule'])} plynulých, "
               f"{len(prehlad['trha'])} s trhaním, {len(prehlad['chyba'])} "
               f"nečitateľných")
+        vsetky = prehlad["plynule"] + prehlad["trha"]
+        if vsetky:
+            minuty = sum(v["trvanie"] for _n, v in vsetky) / 60
+            trhnuti = sum(v["trhnutia"] for _n, v in vsetky)
+            chyba = sum(v["chybajuce_snimky"] for _n, v in vsetky)
+            snimkov = sum(v["snimky"] for _n, v in vsetky)
+            print(f"  spolu {minuty:.1f} minút záznamu, {snimkov} snímkov")
+            print(f"  {trhnuti} trhnutí "
+                  f"({trhnuti / minuty if minuty else 0:.2f} na minútu), "
+                  f"chýba {chyba} snímkov "
+                  f"({100 * chyba / (snimkov + chyba) if snimkov else 0:.3f} %)")
         # Najprv tie najhorsie - tam sa oplati pozriet
         najhorsie = sorted(prehlad["trha"],
                            key=lambda x: -(x[1]["trhnutia"]
