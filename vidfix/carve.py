@@ -388,7 +388,37 @@ MIN_NALS_KOTVA = 4
 MIN_POKRYTIE_KOTVA = 0.85
 
 
-_KOTVY_RE = tuple((h, re.compile(v, re.S), popis) for h, v, popis in KOTVY)
+# Oddelovac ma po hlavicke jediny bajt: primary_pic_type (3 bity) a za nim
+# ukoncovacie bity RBSP, teda jednotka a same nuly. Spodnych pat bitov je
+# preto vzdy presne 0b10000.
+def _ok_aud_h264(nal: bytes) -> bool:
+    return len(nal) == 2 and nal[0] == 0x09 and (nal[1] & 0x1F) == 0x10
+
+
+def _ok_aud_h265(nal: bytes) -> bool:
+    return (len(nal) == 3 and ((nal[0] >> 1) & 0x3F) == 35
+            and (nal[2] & 0x1F) == 0x10)
+
+
+def _ok_sps_h264(nal: bytes) -> bool:
+    return len(nal) >= 8 and (nal[0] & 0x1F) == 7 and plausible_sps(nal) is not None
+
+
+def _ok_vps_h265(nal: bytes) -> bool:
+    # VPS: typ 32, vrstva 0, prve pole vps_video_parameter_set_id (4 bity)
+    return len(nal) >= 6 and ((nal[0] >> 1) & 0x3F) == 32 and nal[1] == 0x01
+
+
+# Kazdy vzor ma vlastne overenie obsahu. Bez neho staci nahodna zhoda peti
+# bajtov - a v nezakodovanom zvuku (PCM) je tichych miest plnych nul dost na
+# to, aby sa pri niekolkogigabajtovom zazname obcas trafila. Falosna kotva by
+# potom orezala skutocny snimok a zanechala v obraze chybu.
+_KOTVY_RE = (
+    (False, re.compile(KOTVY[0][1], re.S), KOTVY[0][2], _ok_aud_h264),
+    (True, re.compile(KOTVY[1][1], re.S), KOTVY[1][2], _ok_aud_h265),
+    (False, re.compile(KOTVY[2][1], re.S), KOTVY[2][2], _ok_sps_h264),
+    (True, re.compile(KOTVY[3][1], re.S), KOTVY[3][2], _ok_vps_h265),
+)
 
 
 def kotvy_offsety(mm, size: int, hint: int = 0, hevc: bool | None = None,
@@ -399,13 +429,14 @@ def kotvy_offsety(mm, size: int, hint: int = 0, hevc: bool | None = None,
     zaznam prejde bez toho, aby sa nacital do pamate.
     """
     najdene = set()
-    for je_hevc, vzor, _popis in _KOTVY_RE:
+    for je_hevc, vzor, _popis, overenie in _KOTVY_RE:
         if hevc is not None and bool(hevc) != je_hevc:
             continue
         pocet = 0
         for m in vzor.finditer(mm, max(0, hint), size):
             idx = m.start()
-            if nal_here(mm, idx, size, je_hevc, min_len=1, max_len=4 << 20) is None:
+            n = nal_here(mm, idx, size, je_hevc, min_len=1, max_len=4 << 20)
+            if n is None or not overenie(bytes(mm[idx + 4:idx + 4 + min(n, 64)])):
                 continue
             najdene.add(idx)
             pocet += 1
@@ -530,7 +561,7 @@ def najdi_kotvy(mm, size: int, hint: int = 0, pocet: int = 24,
     prechadzkou, aby sa vylucila nahodna zhoda aj teoreticky.
     """
     najdene = []
-    for je_hevc, vzor, popis in _KOTVY_RE:
+    for je_hevc, vzor, popis, _overenie in _KOTVY_RE:
         if hevc is not None and bool(hevc) != je_hevc:
             continue
         najdenych = 0

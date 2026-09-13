@@ -725,6 +725,30 @@ class TestKotvySnimkov(unittest.TestCase):
             mm.close()
             f.close()
 
+    def test_v_tichom_zvuku_takmer_ziadne_kotvy(self):
+        """Nekódovaný zvuk je plný núl — samotný vzor bajtov nestačí.
+
+        Pri niekoľkogigabajtovom zázname sa päťbajtová zhoda v tichom PCM
+        trafí tisíckrát. Falošná kotva by orezala skutočný snímok a zanechala
+        v obraze chybu, preto sa overuje aj obsah jednotky.
+        """
+        import re as _re
+        r = random.Random(4)
+        pcm = bytearray()
+        while len(pcm) < (24 << 20):
+            pcm += b"\x00" if r.random() < 0.75 else bytes([r.getrandbits(8)])
+        f, mm, size = self._mm(bytes(pcm))
+        try:
+            hrube = sum(len(_re.findall(v, mm, _re.S)) for _h, v, _p in carve.KOTVY)
+            self.assertGreater(hrube, 100, "vzorka má obsahovať dosť zhôd")
+            kotvy = carve.kotvy_offsety(mm, size)
+            self.assertLess(len(kotvy), hrube / 50,
+                            f"overenie obsahu má zhody odfiltrovať "
+                            f"({len(kotvy)} z {hrube})")
+        finally:
+            mm.close()
+            f.close()
+
     def test_v_nahodnych_datach_ziadne_kotvy(self):
         f, mm, size = self._mm(os.urandom(8 << 20))
         try:
