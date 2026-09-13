@@ -612,12 +612,14 @@ class TestKontrolaVysledku(unittest.TestCase):
 
         TB.path = bez_ffmpeg
         try:
-            v = skontroluj_vysledok(self.zdravy, TB)
+            v = skontroluj_vysledok(self.zdravy, TB, rezim="rychlo")
         finally:
             TB.path = povodny
         self.assertTrue(v["ok"], "index má stačiť aj bez ffmpeg")
         self.assertTrue(v["plynule"])
         self.assertIsNone(v["chyby_dekodovania"])
+        self.assertFalse(v["obraz_overeny"],
+                         "z indexu sa o obraze nedá povedať nič")
 
     def test_dokladna_kontrola_pocita_chyby(self):
         v = skontroluj_vysledok(self.zdravy, TB, dokladne=True)
@@ -626,10 +628,29 @@ class TestKontrolaVysledku(unittest.TestCase):
         self.assertTrue(v["plynule"])
 
     def test_obe_cesty_daju_rovnaku_frekvenciu(self):
-        rychla = skontroluj_vysledok(self.zdravy, TB)
+        rychla = skontroluj_vysledok(self.zdravy, TB, rezim="rychlo")
         dokladna = skontroluj_vysledok(self.zdravy, TB, dokladne=True)
         self.assertAlmostEqual(rychla["fps"], dokladna["fps"], delta=0.1)
         self.assertEqual(rychla["plynule"], dokladna["plynule"])
+
+    def test_predvolena_kontrola_obraz_naozaj_overi(self):
+        """Predvolený režim musí obraz dekódovať, nie mu veriť z indexu."""
+        v = skontroluj_vysledok(self.zdravy, TB)
+        self.assertTrue(v["ok"])
+        self.assertTrue(v["obraz_overeny"])
+        self.assertEqual(v["chyby_dekodovania"], 0)
+        self.assertTrue(v["preverene_useky"])
+
+    def test_vzorka_odhali_pokazeny_obraz(self):
+        """Poškodený obraz musí prejsť ako chyba aj bez celého prechodu."""
+        zle = os.path.join(self.dir, "pokazene.h264")
+        with open(self.zdravy, "rb") as f:
+            surove = f.read()
+        with open(zle, "wb") as f:
+            f.write(surove[len(surove) // 3:])      # stream bez hlavičky
+        v = skontroluj_vysledok(zle, TB)
+        self.assertFalse(v.get("plynule", False),
+                         "rozsypaný súbor sa nesmie vyhlásiť za bezchybný")
 
 
 @potrebuje_ffmpeg

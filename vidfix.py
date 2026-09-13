@@ -212,7 +212,9 @@ def prikaz_kontrola(args) -> int:
             continue
         print("\n" + "=" * 66)
         print(os.path.basename(cesta))
-        v = skontroluj_vysledok(cesta, tb, dokladne=args.dokladne)
+        rezim = ("dokladne" if args.dokladne
+                 else "rychlo" if args.rychlo else "vzorka")
+        v = skontroluj_vysledok(cesta, tb, rezim=rezim)
         if not v.get("ok"):
             print(f"  CHYBA: {v.get('chyba')}")
             zle += 1
@@ -223,17 +225,24 @@ def prikaz_kontrola(args) -> int:
             print(f"  {v['stopa'].strip()}")
         print(f"  snímkov: {v['snimky']}   trvanie: {v['trvanie']} s   "
               f"frekvencia: {v['fps']}/s")
-        if v.get("chyby_dekodovania") is None:
-            print("  chyby obrazu: nemerané (--dokladne ich spočíta)")
+        if not v.get("obraz_overeny"):
+            print("  obraz NEOVERENÝ — čítal sa len index. Index popisuje, čo je "
+                  "v súbore zapísané, nie čo sa z toho dá zobraziť.")
         else:
-            print(f"  chyby dekódovania: {v['chyby_dekodovania']}")
+            print(f"  chyby obrazu: {v['chyby_dekodovania']}")
+        if v.get("preverene_useky"):
+            print(f"  preverené úseky: {', '.join(v['preverene_useky'])} "
+                  f"(celé video prejde --dokladne)")
         if v["plynule"]:
-            print("  PLYNULÉ — rozostupy medzi snímkami sú všade rovnaké.")
+            print("  BEZ CHYBY — rozostupy rovnaké, obraz sa dekóduje celý."
+                  if v.get("obraz_overeny") else
+                  "  ČASOVANIE SEDÍ — o obraze to nehovorí nič.")
             if v.get("koniec_mimo_poradia"):
                 print("  (posledný snímok je mimo poradia — záznam je useknutý "
                       "uprostred skupiny snímkov; v prehrávači to vidieť nie je)")
         else:
-            print(f"  TRHÁ SA: {v['trhnutia']} nepravidelných rozostupov "
+            print(f"  {'CHYBA' if v.get('obraz_overeny') else 'NEROVNOMERNÉ'}: "
+                  f"{v['trhnutia']} nepravidelných rozostupov "
                   f"({v['trhnutia_za_minutu']} na minútu), chýbajúcich snímkov "
                   f"približne {v['chybajuce_snimky']} "
                   f"({v['podiel_chybajucich'] * 100:.2f} %)")
@@ -248,9 +257,12 @@ def prikaz_kontrola(args) -> int:
     spolu = sum(len(x) for x in prehlad.values())
     if spolu > 1:
         print("\n" + "=" * 66)
-        print(f"SÚHRN: {spolu} súborov — {len(prehlad['plynule'])} plynulých, "
-              f"{len(prehlad['trha'])} s trhaním, {len(prehlad['chyba'])} "
+        print(f"SÚHRN: {spolu} súborov — {len(prehlad['plynule'])} bez chyby, "
+              f"{len(prehlad['trha'])} s chybou, {len(prehlad['chyba'])} "
               f"nečitateľných")
+        if not args.dokladne and not args.rychlo:
+            print("  (preverené úseky na začiatku, v strede a na konci — "
+                  "celé videá prejde --dokladne)")
         vsetky = prehlad["plynule"] + prehlad["trha"]
         if vsetky:
             minuty = sum(v["trvanie"] for _n, v in vsetky) / 60
@@ -269,7 +281,7 @@ def prikaz_kontrola(args) -> int:
         for nazov, v in najhorsie[:15]:
             chyby = v["chyby_dekodovania"]
             print(f"  {nazov:40s} {v['trhnutia']} trhnutí, "
-                  + (f"{chyby} chýb dekódovania, " if chyby is not None else "")
+                  + (f"{chyby} chýb obrazu, " if chyby is not None else "")
                   + f"chýba ~{v['chybajuce_snimky']} snímkov")
         if len(najhorsie) > 15:
             print(f"  … a ďalších {len(najhorsie) - 15}")
@@ -383,8 +395,11 @@ def main(argv=None) -> int:
                         help="zmeria hotovy vysledok - plynulost a pocet snimkov")
     pk.add_argument("subor", nargs="+")
     pk.add_argument("--dokladne", action="store_true",
-                    help="prejst cele video dekoderom - pomalsie, zato spocita "
-                         "aj chyby obrazu (bez toho sa cita len index)")
+                    help="prejst CELE video dekoderom - jedina uplna odpoved, "
+                         "ale pri velkom zazname minuty na subor")
+    pk.add_argument("--rychlo", action="store_true",
+                    help="len precitat index: rozlisenie a frekvencia. "
+                         "O tom, ci sa obraz da zobrazit, nehovori nic")
 
     pu = pod.add_parser("uprac", help="zmaze medzisubory, ku ktorym uz je hotovy vysledok")
     pu.add_argument("priecinok")

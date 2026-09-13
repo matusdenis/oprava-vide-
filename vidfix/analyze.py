@@ -528,55 +528,111 @@ def _plynulost(casy: list) -> dict:
 
 
 def skontroluj_vysledok(cesta: str, toolbox, max_snimkov: int = 2000000,
-                        dokladne: bool = False) -> dict:
-    """Zmeria hotove video: plynulost, pocet snimkov, pripadne chyby dekodovania.
+                        dokladne: bool = False, rezim: str = "vzorka") -> dict:
+    """Zmeria hotove video. Tri rezimy, kazdy meria nieco ine.
 
-    Vyrezany stream ziadne casovanie neobsahuje, takze sa mu priradi az pri
-    baleni do MP4. Ked sedi, su rozostupy medzi snimkami vsade rovnake. Ked
-    nie, alebo ked v strede chybaju snimky, prehravac to ukaze ako sekanie -
-    a prave to sa tu da zmerat.
+    `rychlo` precita len index: rozlisenie, frekvenciu a deklarovane casy
+    snimkov. Je to okamzite, ale o obraze to nehovori NIC - index popisuje, co
+    je v subore zapisane, nie co sa z toho da zobrazit. Snimok, ktory sa
+    nedekoduje, ma v indexe svoje miesto ako kazdy iny.
 
-    Casy sa citaju z indexu hotoveho suboru, takze sa obraz vobec nedekoduje:
-    na sestgigabajtovom zazname je to zlomok sekundy namiesto minut. Chyby
-    dekodovania sa takto zistit nedaju - na to je `dokladne=True`, ktore video
-    naozaj prejde.
+    `vzorka` (predvolene) naozaj dekoduje tri useky - zaciatok, stred a koniec.
+    Zachyti chyby obrazu aj vypadky snimkov, a trva sekundu namiesto minut.
+    Chyba mimo tychto usekov mu unikne.
+
+    `dokladne` prejde cele video. Jedine to da uplnu odpoved, ale pri
+    sestgigabajtovom zazname to je zhruba sest minut na subor.
     """
     if not os.path.isfile(cesta):
         return {"ok": False, "chyba": "súbor neexistuje"}
-    zaklad = {"subor": os.path.basename(cesta)}
+    if dokladne:
+        rezim = "dokladne"
+    zaklad = {"subor": os.path.basename(cesta), "rezim": rezim}
 
-    if not dokladne:
-        try:
-            index = mp4.casy_snimkov(cesta, max_snimkov=max_snimkov)
-        except (OSError, ValueError, struct.error):
-            index = None
+    try:
+        index = mp4.casy_snimkov(cesta, max_snimkov=max_snimkov)
+    except (OSError, ValueError, struct.error):
+        index = None
+    if index:
+        zaklad["stopa"] = f"{index['kodek']} {index['sirka']}×{index['vyska']}"
+        zaklad["snimkov_v_indexe"] = len(index["casy"])
+
+    if rezim == "rychlo":
         if index and len(index["casy"]) >= 2:
             v = _plynulost(index["casy"])
-            popis = f"{index['kodek']} {index['sirka']}×{index['vyska']}"
-            return {**zaklad, **v, "stopa": popis.strip(),
-                    "chyby_dekodovania": None, "ukazky_chyb": []}
+            return {**zaklad, **v, "chyby_dekodovania": None, "ukazky_chyb": [],
+                    "obraz_overeny": False}
         # Bez pouzitelneho indexu neostava ine, nez subor prejst.
+        rezim = "vzorka"
 
+    if rezim == "vzorka":
+        trvanie = (index["casy"][-1] - index["casy"][0]) if index else 0.0
+        return _skontroluj_vzorkou(cesta, toolbox, zaklad, trvanie)
     return _skontroluj_dekodovanim(cesta, toolbox, max_snimkov, zaklad)
 
 
-def _skontroluj_dekodovanim(cesta: str, toolbox, max_snimkov: int,
-                            zaklad: dict) -> dict:
-    """Prejde cele video dekoderom - pomalsie, zato spocita aj chyby obrazu."""
+# Dlzka jedneho preverovaneho useku a kde sa berie
+DLZKA_VZORKY = 10.0
+
+
+def _skontroluj_vzorkou(cesta: str, toolbox, zaklad: dict,
+                        trvanie: float) -> dict:
+    """Dekoduje zaciatok, stred a koniec videa.
+
+    Vacsina chyb po vyrezavani sedi prave na okrajoch: na zaciatku, kde stream
+    zacina uprostred skupiny snimkov, a na konci, kde je useknuty. Stred je
+    kontrolna vzorka.
+    """
+    useky = [("začiatok", ["-t", str(DLZKA_VZORKY)])]
+    if trvanie > 3 * DLZKA_VZORKY:
+        stred = max(0.0, trvanie / 2 - DLZKA_VZORKY / 2)
+        useky.append(("stred", ["-ss", f"{stred:.3f}", "-t", str(DLZKA_VZORKY)]))
+        useky.append(("koniec", ["-sseof", f"-{DLZKA_VZORKY}"]))
+
+    chyby, ukazky, casti = 0, [], []
+    for nazov, args in useky:
+        v = _dekoduj_usek(cesta, toolbox, args)
+        if v.get("chyba"):
+            return {**zaklad, "ok": False, "chyba": v["chyba"]}
+        chyby += v["chyby"]
+        ukazky += v["ukazky"]
+        if len(v["casy"]) >= 2:
+            casti.append((nazov, _plynulost(sorted(v["casy"]))))
+
+    if not casti:
+        return {**zaklad, "ok": False,
+                "chyba": "z videa sa nepodarilo dekódovať ani dva snímky"}
+
+    # Cisla sa beru z useku, ktory dopadol najhorsie - to je ten, ktory
+    # pouzivatela zaujima.
+    najhorsi = max(casti, key=lambda c: (c[1]["trhnutia"], -c[1]["snimky"]))[1]
+    out = {**zaklad, **najhorsi, "chyby_dekodovania": chyby,
+           "ukazky_chyb": ukazky[:5], "obraz_overeny": True,
+           "preverene_useky": [n for n, _v in casti]}
+    out["trhnutia"] = sum(c[1]["trhnutia"] for c in casti)
+    out["kde_trha"] = [k for _n, c in casti for k in c["kde_trha"]][:20]
+    out["plynule"] = out["trhnutia"] == 0 and chyby == 0
+    return out
+
+
+def _dekoduj_usek(cesta: str, toolbox, args: list) -> dict:
+    """Prejde dekoderom jeden usek videa a vrati casy snimkov a chyby."""
     import subprocess
 
     ffmpeg = toolbox.path("ffmpeg")
     if not ffmpeg:
-        return {**zaklad, "ok": False, "chyba": "ffmpeg nie je k dispozícii"}
+        return {"chyba": "ffmpeg nie je k dispozícii"}
     try:
-        r = subprocess.run([ffmpeg, "-v", "info", "-i", cesta,
-                            "-vf", "showinfo", "-f", "null", "-"],
+        r = subprocess.run([ffmpeg, "-v", "info"] + args
+                           + ["-i", cesta, "-vf", "showinfo", "-f", "null", "-"],
                            capture_output=True, text=True, errors="replace",
-                           timeout=7200)
+                           timeout=1800)
     except Exception as exc:                      # noqa: BLE001
-        return {**zaklad, "ok": False, "chyba": str(exc)}
+        return {"chyba": str(exc)}
+    return _rozober_vystup(r.stderr or r.stdout or "")
 
-    vystup = r.stderr or r.stdout or ""
+
+def _rozober_vystup(vystup: str, max_snimkov: int = 2000000) -> dict:
     casy = []
     for riadok in vystup.splitlines():
         i = riadok.find("pts_time:")
@@ -588,14 +644,20 @@ def _skontroluj_dekodovanim(cesta: str, toolbox, max_snimkov: int,
             continue
         if len(casy) >= max_snimkov:
             break
-
-    out = dict(zaklad)
-    for riadok in vystup.splitlines():
-        if "Video:" in riadok and "Stream" in riadok:
-            out["stopa"] = riadok.strip()
-            break
     chyby = [l for l in vystup.splitlines()
              if "error" in l.lower() or "Invalid" in l or "corrupt" in l.lower()]
-    out["chyby_dekodovania"] = len(chyby)
-    out["ukazky_chyb"] = chyby[:5]
-    return {**out, **_plynulost(sorted(casy))}
+    return {"casy": casy, "chyby": len(chyby), "ukazky": chyby[:5]}
+
+
+def _skontroluj_dekodovanim(cesta: str, toolbox, max_snimkov: int,
+                            zaklad: dict) -> dict:
+    """Prejde cele video dekoderom - jedina uplna odpoved, zato najpomalsia."""
+    v = _dekoduj_usek(cesta, toolbox, [])
+    if v.get("chyba"):
+        return {**zaklad, "ok": False, "chyba": v["chyba"]}
+    out = {**zaklad, "chyby_dekodovania": v["chyby"], "ukazky_chyb": v["ukazky"],
+           "obraz_overeny": True}
+    vysledok = {**out, **_plynulost(sorted(v["casy"][:max_snimkov]))}
+    vysledok["plynule"] = (vysledok.get("plynule", False)
+                           and v["chyby"] == 0)
+    return vysledok
