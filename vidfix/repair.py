@@ -416,6 +416,24 @@ def _vyber_start(ctx: Ctx, mm, size: int, hlavicky: list, hint: int = 0,
     return s_kotvami(zvysne[0])
 
 
+def _poradie_zo_streamu(raw: str, hevc: bool) -> list:
+    """Precita poradie zobrazenia zo surového Annex-B streamu."""
+    ps = carve.parameter_sets_anywhere(raw, hevc=hevc)
+    if not ps:
+        return []
+    if hevc:
+        sps = carve.find_nal_in_annexb(ps, 33, hevc=True)
+        pps = carve.find_nal_in_annexb(ps, 34, hevc=True)
+        info = carve.parse_hevc_sps(sps) if sps else None
+        pinfo = carve.parse_hevc_pps(pps) if pps else None
+        if not info or pinfo is None:
+            return []
+        return carve.poradie_zobrazenia(raw, info, hevc=True, pps=pinfo)
+    sps = carve.find_sps_in_annexb(ps)
+    info = carve.parse_h264_sps(sps) if sps else None
+    return carve.poradie_zobrazenia(raw, info) if info else []
+
+
 def _doplnit_poradie_zobrazenia(ctx: Ctx, raw: str, dst: str, hevc: bool,
                                 fps: int) -> bool:
     """Dopise do hotoveho MP4 poradie zobrazenia snimkov.
@@ -428,16 +446,9 @@ def _doplnit_poradie_zobrazenia(ctx: Ctx, raw: str, dst: str, hevc: bool,
     dopocita sam z bitstreamu, preto v nom to iste video bezi spravne.
 
     Poradie je zapisane v hlavicke kazdeho rezu, takze sa da precitat a doplnit.
-    Zatial len pre H.264; H.265 pocita poradie inak.
     """
-    if hevc:
-        return False
     try:
-        sps = carve.find_sps_in_annexb(carve.parameter_sets_anywhere(raw))
-        info = carve.parse_h264_sps(sps) if sps else None
-        if not info:
-            return False
-        miesta = carve.poradie_zobrazenia(raw, info)
+        miesta = _poradie_zo_streamu(raw, hevc)
         if not miesta:
             return False
         # pripona musi zostat .mp4, inak ffmpeg nevie, do coho bali
@@ -494,20 +505,20 @@ def oprav_poradie(cesta: str, toolbox, log=None) -> dict:
         if stopa.ctts:
             return {**von, "ok": True, "preskocene": True,
                     "dovod": "poradie zobrazenia už v súbore je"}
-        if not stopa.codec.startswith("avc"):
+        hevc = stopa.codec.startswith(("hvc", "hev"))
+        if not hevc and not stopa.codec.startswith("avc"):
             return {**von, "ok": False,
-                    "dovod": f"zatiaľ len pre H.264 (tento je {stopa.codec})"}
+                    "dovod": f"nepodporovaný kodek {stopa.codec}"}
 
-        surovy = cesta + ".stream.h264"
+        surovy = cesta + (".stream.h265" if hevc else ".stream.h264")
         res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", cesta, "-map", "0:v:0",
-                                     "-c", "copy", "-bsf:v", "h264_mp4toannexb",
-                                     "-f", "h264", surovy], log=None)
+                                     "-c", "copy", "-bsf:v",
+                                     "hevc_mp4toannexb" if hevc else "h264_mp4toannexb",
+                                     "-f", "hevc" if hevc else "h264", surovy], log=None)
         if res["code"] != 0 or not os.path.exists(surovy):
             return {**von, "ok": False, "dovod": "stream sa nepodarilo vybrať"}
         try:
-            info = carve.parse_h264_sps(
-                carve.find_sps_in_annexb(carve.parameter_sets_anywhere(surovy)))
-            miesta = carve.poradie_zobrazenia(surovy, info) if info else []
+            miesta = _poradie_zo_streamu(surovy, hevc)
         finally:
             os.remove(surovy)
         if not miesta:

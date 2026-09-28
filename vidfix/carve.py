@@ -1016,11 +1016,79 @@ def poc_rezu(nal: bytes, sps: dict, predchadzajuce: dict) -> int | None:
     return msb + lsb
 
 
-def poradie_zobrazenia(cesta: str, sps: dict, max_snimkov: int = 4000000) -> list:
+def parse_hevc_pps(nal: bytes) -> dict | None:
+    """Z PPS pre H.265 vytiahne len to, co treba na precitanie hlavicky rezu."""
+    try:
+        r = _BitReader(_unescape(nal[2:16]))
+        r.ue()                          # pps_pic_parameter_set_id
+        r.ue()                          # pps_seq_parameter_set_id
+        zavisle = bool(r.bit())         # dependent_slice_segments_enabled_flag
+        priznak_vystupu = bool(r.bit())  # output_flag_present_flag
+        extra_bity = r.bits(3)          # num_extra_slice_header_bits
+        return {"zavisle_rezy": zavisle, "priznak_vystupu": priznak_vystupu,
+                "extra_bity": extra_bity}
+    except (EOFError, ValueError, IndexError):
+        return None
+
+
+# Typy jednotiek H.265, ktore zacinaju novu skupinu (IRAP)
+IRAP_H265 = set(range(16, 24))
+IDR_H265 = (19, 20)
+
+
+def poc_rezu_h265(nal: bytes, sps: dict, pps: dict, predchadzajuce: dict) -> int | None:
+    """Precita poradie zobrazenia jedneho rezu H.265."""
+    if not sps.get("log2_max_poc_lsb") or sps.get("samostatne_zlozky"):
+        return None
+    typ = (nal[0] >> 1) & 0x3F
+    if typ > 31:                        # len obrazove jednotky
+        return None
+    try:
+        r = _BitReader(_unescape(nal[2:48]))
+        if not r.bit():                 # first_slice_segment_in_pic_flag
+            return None                 # dalsi rez toho isteho snimku
+        if typ in IRAP_H265:
+            r.bit()                     # no_output_of_prior_pics_flag
+        r.ue()                          # slice_pic_parameter_set_id
+        for _ in range(pps.get("extra_bity", 0)):
+            r.bit()
+        r.ue()                          # slice_type
+        if pps.get("priznak_vystupu"):
+            r.bit()                     # pic_output_flag
+        if typ in IDR_H265:
+            lsb = 0                     # IDR poradie nenesie, zacina od nuly
+        else:
+            lsb = r.bits(sps["log2_max_poc_lsb"])
+    except (EOFError, ValueError, IndexError):
+        return None
+
+    max_lsb = 1 << sps["log2_max_poc_lsb"]
+    if typ in IRAP_H265:
+        predchadzajuce["msb"] = 0
+        predchadzajuce["lsb"] = lsb
+        return lsb
+    prev_msb = predchadzajuce.get("msb", 0)
+    prev_lsb = predchadzajuce.get("lsb", 0)
+    if lsb < prev_lsb and (prev_lsb - lsb) >= max_lsb // 2:
+        msb = prev_msb + max_lsb
+    elif lsb > prev_lsb and (lsb - prev_lsb) > max_lsb // 2:
+        msb = prev_msb - max_lsb
+    else:
+        msb = prev_msb
+    # Stav nesu len jednotky, ktore su referencne (sublayer non-reference typy
+    # su parne cisla pod 16).
+    if typ >= 16 or typ % 2 == 1:
+        predchadzajuce["msb"] = msb
+        predchadzajuce["lsb"] = lsb
+    return msb + lsb
+
+
+def poradie_zobrazenia(cesta: str, sps: dict, max_snimkov: int = 4000000,
+                       hevc: bool = False, pps: dict | None = None) -> list:
     """Vrati poradie zobrazenia pre kazdu pristupovu jednotku surového streamu.
 
-    Vysledok je zoznam cisel v poradi DEKODOVANIA; hodnota hovori, kolkat=y
-    v poradí zobrazenia snimok je. Ked sa poradie precitat neda, vrati [].
+    Vysledok je zoznam cisel v poradi DEKODOVANIA; hodnota hovori, kolky
+    v poradi zobrazenia dany snimok je. Ked sa poradie precitat neda, vrati [].
     """
     pocty = []
     zaciatky = []
@@ -1040,11 +1108,16 @@ def poradie_zobrazenia(cesta: str, sps: dict, max_snimkov: int = 4000000) -> lis
         while kon > po and data[kon - 1] == 0:
             kon -= 1                    # odrez nuly patriace dalsiemu start kodu
         nal = data[po:kon]
-        if nal:
-            p = poc_rezu(nal, sps, stav)
+        if len(nal) >= 3:
+            if hevc:
+                p = poc_rezu_h265(nal, sps, pps or {}, stav)
+                nova_skupina = ((nal[0] >> 1) & 0x3F) in IRAP_H265
+            else:
+                p = poc_rezu(nal, sps, stav)
+                nova_skupina = (nal[0] & 0x1F) == 5
             if p is not None:
                 pocty.append(p)
-                zaciatky.append((nal[0] & 0x1F) == 5)
+                zaciatky.append(nova_skupina)
     if len(pocty) < 2:
         return []
 
@@ -1329,8 +1402,9 @@ def parse_hevc_sps(nal: bytes) -> dict | None:
                 r.bits(8)
         r.ue()                          # sps_seq_parameter_set_id
         chroma = r.ue()
+        samostatne_zlozky = False
         if chroma == 3:
-            r.bit()                     # separate_colour_plane_flag
+            samostatne_zlozky = bool(r.bit())   # separate_colour_plane_flag
         sirka = r.ue()                  # pic_width_in_luma_samples
         vyska = r.ue()                  # pic_height_in_luma_samples
         if r.bit():                     # conformance_window_flag
@@ -1338,10 +1412,20 @@ def parse_hevc_sps(nal: bytes) -> dict | None:
             sub_h = 2 if chroma == 1 else 1
             sirka -= (r.ue() + r.ue()) * sub_w
             vyska -= (r.ue() + r.ue()) * sub_h
+        # Dalej uz len kvoli poradiu zobrazenia: dlzka pola `slice_pic_order_cnt_lsb`
+        log2_max_poc_lsb = 0
+        try:
+            r.ue()                      # bit_depth_luma_minus8
+            r.ue()                      # bit_depth_chroma_minus8
+            log2_max_poc_lsb = r.ue() + 4
+        except (EOFError, ValueError, IndexError):
+            log2_max_poc_lsb = 0
         nazvy = {1: "Main", 2: "Main 10", 3: "Main Still Picture", 4: "Range Extensions"}
         return {"profile_idc": profile_idc, "profil": nazvy.get(profile_idc, str(profile_idc)),
                 "level_idc": level_idc, "uroven": f"{level_idc / 30:.1f}",
-                "sirka": sirka, "vyska": vyska}
+                "sirka": sirka, "vyska": vyska,
+                "log2_max_poc_lsb": log2_max_poc_lsb,
+                "samostatne_zlozky": samostatne_zlozky}
     except (EOFError, ValueError, IndexError):
         return None
 

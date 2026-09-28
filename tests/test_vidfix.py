@@ -683,6 +683,37 @@ class TestPoradieZobrazenia(unittest.TestCase):
         self.assertTrue(v["ok"])
         self.assertTrue(v.get("preskocene"), "poradie tam už je, netreba nič meniť")
 
+    def test_h265_ma_vlastnu_pyramidu_b_snimkov(self):
+        """H.265 počíta poradie inak a používa zložitejšiu pyramídu B-snímkov."""
+        zdroj = os.path.join(self.dir, "h265.mp4")
+        r = TB.run("ffmpeg", ["-y", "-v", "error", "-f", "lavfi", "-i",
+                              "testsrc2=size=320x180:rate=25", "-t", "3",
+                              "-c:v", "libx265", "-preset", "ultrafast",
+                              "-tag:v", "hvc1", "-pix_fmt", "yuv420p",
+                              "-x265-params", "bframes=3:keyint=25:log-level=none",
+                              zdroj], log=None)
+        if r["code"] != 0:
+            self.skipTest("libx265 nie je k dispozícii")
+        ocakavane = self._poradie_z_kontajnera(zdroj)
+        if ocakavane == list(range(len(ocakavane))):
+            self.skipTest("ukážka nemá B-snímky")
+
+        surovy = os.path.join(self.dir, "h265.raw")
+        TB.run("ffmpeg", ["-y", "-v", "error", "-i", zdroj, "-map", "0:v:0",
+                          "-c", "copy", "-bsf:v", "hevc_mp4toannexb",
+                          "-f", "hevc", surovy], log=None)
+        bez = os.path.join(self.dir, "h265_bez.mp4")
+        TB.run("ffmpeg", ["-y", "-v", "error", "-r", "25", "-f", "hevc",
+                          "-i", surovy, "-c", "copy", "-avoid_negative_ts",
+                          "disabled", "-movflags", "+faststart", bez], log=None)
+        self.assertEqual(self._poradie_z_kontajnera(bez),
+                         list(range(len(ocakavane))),
+                         "takto zabalený súbor poradie obsahovať nemá")
+
+        v = oprav_poradie(bez, TB)
+        self.assertTrue(v["ok"], v.get("dovod"))
+        self.assertEqual(self._poradie_z_kontajnera(bez), ocakavane)
+
 
 @potrebuje_ffmpeg
 class TestKontrolaVysledku(unittest.TestCase):
