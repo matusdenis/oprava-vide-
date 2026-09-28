@@ -780,6 +780,95 @@ def damage_map(mm, track, struct_start: int, max_checks: int = 4000, hevc: bool 
     }
 
 
+def _najdi_box(boxy: list, *cesta: bytes):
+    """Prejde vnorenu cestu boxov, napr. (b"trak", b"mdia", b"minf", b"stbl")."""
+    aktualne = boxy
+    box = None
+    for typ in cesta:
+        box = next((b for b in aktualne if b.type == typ), None)
+        if box is None:
+            return None
+        aktualne = box.children
+    return box
+
+
+def doplnit_ctts(cesta: str, miesta: list, delta: int) -> bool:
+    """Zapise do MP4 tabulku `ctts` - poradie zobrazenia snimkov.
+
+    Surovy H.264 stream casove znacky neobsahuje, takze ffmpeg pri baleni ziadne
+    poradie zobrazenia zapisat nevie. Pri B-snimkoch sa vsak poradie dekodovania
+    od poradia zobrazenia lisi a prehravac, ktory veri kontajneru, ukazuje snimky
+    poprehadzovane - vyzera to ako sekanie.
+
+    `miesta[i]` hovori, kolkaty v poradi zobrazenia je snimok dekodovany ako i-ty.
+    Tabulka sa vklada do uz hotoveho suboru; `moov` musi byt na jeho KONCI, inak
+    by sa posunuli offsety dat. Vracia True, ked sa zapis podaril.
+    """
+    posuny = [(m - i) * delta for i, m in enumerate(miesta)]
+    if not any(posuny):
+        return False                    # bez B-snimkov nie je co zapisovat
+
+    # zbalenie do usekov (pocet, posun)
+    useky = []
+    for p in posuny:
+        if useky and useky[-1][1] == p:
+            useky[-1][0] += 1
+        else:
+            useky.append([1, p])
+    zaporny = any(p < 0 for _n, p in useky)
+    telo = struct.pack(">BBBBI", 1 if zaporny else 0, 0, 0, 0, len(useky))
+    for pocet, posun in useky:
+        telo += struct.pack(">Ii" if zaporny else ">II", pocet, posun)
+    novy_box = box(b"ctts", telo)
+
+    f, mm, size = open_mm(cesta)
+    try:
+        boxy, _ = chain_from(mm, 0, size)
+        moov = next((b for b in boxy if b.type == b"moov"), None)
+        if moov is None or moov.end != size:
+            return False                # `moov` musi byt na konci suboru
+        moov.children = parse_tree(mm, moov.data_offset, moov.end, size)
+        stbl = predkovia = None
+        for trak in [c for c in moov.children if c.type == b"trak"]:
+            hdlr = _najdi_box(trak.children, b"mdia", b"hdlr")
+            if hdlr is None:
+                continue
+            d = _read(mm, hdlr.data_offset, min(hdlr.data_size, 24))
+            if len(d) < 12 or d[8:12] != b"vide":
+                continue
+            mdia = _najdi_box(trak.children, b"mdia")
+            minf = _najdi_box(trak.children, b"mdia", b"minf")
+            stbl = _najdi_box(trak.children, b"mdia", b"minf", b"stbl")
+            predkovia = [moov, trak, mdia, minf, stbl]
+            break
+        if stbl is None or any(b is None for b in predkovia):
+            return False
+        if any(b.type == b"ctts" for b in stbl.children):
+            return False                # uz ju tam ffmpeg zapisal
+        stts = next((b for b in stbl.children if b.type == b"stts"), None)
+        if stts is None or any(b.size == 0 or b.size == 1 for b in predkovia):
+            return False
+        data = bytes(mm[moov.offset:moov.end])
+        vloz = stts.end - moov.offset
+    finally:
+        mm.close()
+        f.close()
+
+    upraveny = bytearray(data[:vloz] + novy_box + data[vloz:])
+    for b in predkovia:                 # kazdemu nadradenemu boxu narastie velkost
+        rel = b.offset - moov.offset
+        nova = struct.unpack(">I", upraveny[rel:rel + 4])[0] + len(novy_box)
+        if nova > 0xFFFFFFFF:
+            return False
+        upraveny[rel:rel + 4] = struct.pack(">I", nova)
+
+    with open(cesta, "r+b") as fo:
+        fo.seek(moov.offset)
+        fo.write(upraveny)
+        fo.truncate()
+    return True
+
+
 def moov_od_zaciatku(mm, size: int):
     """Najde `moov` normalnou cestou - prechodom retazca boxov od zaciatku.
 

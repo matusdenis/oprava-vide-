@@ -876,10 +876,11 @@ def parse_h264_sps(sps: bytes) -> dict | None:
                             if next_:
                                 next_ = (last + r.se() + 256) % 256
                             last = next_ or last
-        r.ue()                         # log2_max_frame_num_minus4
+        log2_max_frame_num = r.ue() + 4
         pic_order_cnt_type = r.ue()
+        log2_max_poc_lsb = 0
         if pic_order_cnt_type == 0:
-            r.ue()
+            log2_max_poc_lsb = r.ue() + 4
         elif pic_order_cnt_type == 1:
             r.bit()
             r.se()
@@ -910,6 +911,11 @@ def parse_h264_sps(sps: bytes) -> dict | None:
             "uroven": f"{level_idc // 10}.{level_idc % 10}",
             "sirka": width,
             "vyska": height,
+            # Polia potrebne na precitanie poradia zobrazenia zo slice hlavicky
+            "log2_max_frame_num": log2_max_frame_num,
+            "pic_order_cnt_type": pic_order_cnt_type,
+            "log2_max_poc_lsb": log2_max_poc_lsb,
+            "frame_mbs_only": bool(frame_mbs_only),
         }
     except (EOFError, ValueError, IndexError):
         return None
@@ -954,6 +960,108 @@ def find_nal_in_annexb(data: bytes, nal_type: int, hevc: bool = False) -> bytes 
         if nxt < 0:
             return None
         pos = nxt
+
+
+# ---------------------------------------------------------------------------
+# Poradie zobrazenia snimkov (POC)
+# ---------------------------------------------------------------------------
+# Surovy H.264 stream nenesie casove znacky - ffmpeg im teda pri baleni do MP4
+# ziadne poradie zobrazenia priradit nevie a tabulka `ctts` ostane prazdna.
+# Pri B-snimkoch sa vsak poradie dekodovania od poradia zobrazenia lisi:
+# v subore je I P B B P, na obrazovke ma byt I B B P. Prehravac, ktory verí
+# kontajneru (napriklad strihovy program), potom ukazuje snimky poprehadzovane
+# a vyzera to ako sekanie. VLC si poradie dopocita sam z bitstreamu, preto v nom
+# to iste video bezi spravne.
+#
+# Poradie je zapisane v hlavicke kazdeho rezu ako `pic_order_cnt_lsb`. Da sa
+# teda precitat a tabulka `ctts` dopocitat.
+
+def poc_rezu(nal: bytes, sps: dict, predchadzajuce: dict) -> int | None:
+    """Precita poradie zobrazenia jedneho rezu. `predchadzajuce` si nesie stav."""
+    if sps.get("pic_order_cnt_type") != 0 or not sps.get("frame_mbs_only"):
+        return None
+    typ = nal[0] & 0x1F
+    if typ not in (1, 5):
+        return None
+    ref_idc = (nal[0] >> 5) & 3
+    try:
+        r = _BitReader(_unescape(nal[1:40]))
+        r.ue()                          # first_mb_in_slice
+        r.ue()                          # slice_type
+        r.ue()                          # pic_parameter_set_id
+        r.bits(sps["log2_max_frame_num"])
+        if typ == 5:
+            r.ue()                      # idr_pic_id
+        lsb = r.bits(sps["log2_max_poc_lsb"])
+    except (EOFError, ValueError, IndexError):
+        return None
+
+    max_lsb = 1 << sps["log2_max_poc_lsb"]
+    if typ == 5:                        # IDR zacina poradie odznova
+        predchadzajuce["msb"] = 0
+        predchadzajuce["lsb"] = 0
+        msb = 0
+    else:
+        prev_msb = predchadzajuce.get("msb", 0)
+        prev_lsb = predchadzajuce.get("lsb", 0)
+        if lsb < prev_lsb and (prev_lsb - lsb) >= max_lsb // 2:
+            msb = prev_msb + max_lsb
+        elif lsb > prev_lsb and (lsb - prev_lsb) > max_lsb // 2:
+            msb = prev_msb - max_lsb
+        else:
+            msb = prev_msb
+    if ref_idc:                         # stav nesu len referencne snimky
+        predchadzajuce["msb"] = msb
+        predchadzajuce["lsb"] = lsb
+    return msb + lsb
+
+
+def poradie_zobrazenia(cesta: str, sps: dict, max_snimkov: int = 4000000) -> list:
+    """Vrati poradie zobrazenia pre kazdu pristupovu jednotku surového streamu.
+
+    Vysledok je zoznam cisel v poradi DEKODOVANIA; hodnota hovori, kolkat=y
+    v poradí zobrazenia snimok je. Ked sa poradie precitat neda, vrati [].
+    """
+    pocty = []
+    zaciatky = []
+    stav = {}
+    try:
+        with open(cesta, "rb") as f:
+            data = f.read()
+    except OSError:
+        return []
+    # Start kod ma tri alebo styri bajty - oba tvary sa bezne miesaju
+    import re as _re
+    hranice = [(m.start(), m.end()) for m in _re.finditer(rb"\x00\x00\x01", data)]
+    for poradove, (zac, po) in enumerate(hranice):
+        if len(pocty) >= max_snimkov:
+            break
+        kon = hranice[poradove + 1][0] if poradove + 1 < len(hranice) else len(data)
+        while kon > po and data[kon - 1] == 0:
+            kon -= 1                    # odrez nuly patriace dalsiemu start kodu
+        nal = data[po:kon]
+        if nal:
+            p = poc_rezu(nal, sps, stav)
+            if p is not None:
+                pocty.append(p)
+                zaciatky.append((nal[0] & 0x1F) == 5)
+    if len(pocty) < 2:
+        return []
+
+    # POC sa pri kazdom klucovom snimku zacina odznova, takze porovnavat sa
+    # daju len snimky v ramci tej istej skupiny. Triedit cez cely subor by
+    # pomiesalo snimky z roznych skupin dokopy.
+    miesto = [0] * len(pocty)
+    hranice = [i for i, je_idr in enumerate(zaciatky) if je_idr]
+    if not hranice or hranice[0] != 0:
+        hranice = [0] + hranice
+    hranice.append(len(pocty))
+    for k in range(len(hranice) - 1):
+        zac, kon = hranice[k], hranice[k + 1]
+        usek = sorted(range(zac, kon), key=lambda i: (pocty[i], i))
+        for kam, odkial in enumerate(usek):
+            miesto[odkial] = zac + kam
+    return miesto
 
 
 class _BitCopier:

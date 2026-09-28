@@ -19,7 +19,8 @@ from vidfix.analyze import (analyze, rychly_verdikt,             # noqa: E402
                             skontroluj_vysledok, _je_v_tele_video)
 from vidfix.headerdb import HeaderDB                             # noqa: E402
 from vidfix.repair import (Ctx, najdi_medzikroky, najdi_videa,   # noqa: E402
-                           hotovy_vystup, over_vystup, zisti_fps,
+                           hotovy_vystup, oprav_poradie, over_vystup,
+                           zisti_fps,
                            _VZORY_CACHE, _zbieraj_vzory,
                            spusti, spusti_davku)
 from vidfix.tools import Toolbox                                 # noqa: E402
@@ -598,6 +599,89 @@ class TestPamatNaVzory(ZakladVzorky):
                   {"vzor": self.zdroj})
         self.assertTrue(_zbieraj_vzory(iny, False))
         self.assertGreaterEqual(len(_VZORY_CACHE), 2)
+
+
+@potrebuje_ffmpeg
+class TestPoradieZobrazenia(unittest.TestCase):
+    """Pri B-snímkoch sa poradie dekódovania líši od poradia zobrazenia.
+
+    Surový stream časové značky neobsahuje, takže ffmpeg pri balení do MP4
+    žiadne poradie zapísať nevie. Prehrávač, ktorý verí kontajneru — napríklad
+    strihový program — potom ukazuje snímky poprehadzované a vyzerá to ako
+    sekanie. VLC si poradie dopočíta sám, preto v ňom to isté video beží dobre.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not MA_FFMPEG:
+            raise unittest.SkipTest("ffmpeg nie je k dispozicii")
+        cls.dir = tempfile.mkdtemp(prefix="vidfix-poradie-")
+        # video s B-snímkami: bez nich by sa nebolo čo preusporadúvať
+        cls.zdroj = os.path.join(cls.dir, "bframy.mp4")
+        r = TB.run("ffmpeg", ["-y", "-v", "error", "-f", "lavfi", "-i",
+                              "testsrc2=size=320x180:rate=25", "-t", "3",
+                              "-c:v", "libx264", "-preset", "veryfast",
+                              "-bf", "2", "-g", "25", "-pix_fmt", "yuv420p",
+                              cls.zdroj], log=None)
+        if r["code"] != 0:
+            raise unittest.SkipTest("ukážku sa nepodarilo vyrobiť")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def _poradie_z_kontajnera(self, cesta):
+        """Poradie zobrazenia tak, ako ho popisuje samotný súbor."""
+        r = TB.run("ffmpeg", ["-v", "error", "-i", cesta, "-map", "0:v:0",
+                              "-c", "copy", "-f", "framecrc", "-"], log=None)
+        pts = [int(l.split(",")[2]) for l in r["output"].splitlines()
+               if l.startswith("0,")]
+        poradie = sorted(range(len(pts)), key=lambda i: pts[i])
+        miesta = [0] * len(pts)
+        for kam, odkial in enumerate(poradie):
+            miesta[odkial] = kam
+        return miesta
+
+    def test_poradie_sa_precita_z_bitstreamu(self):
+        """Prečítané poradie musí sedieť s tým, čo hovorí pôvodný kontajner."""
+        surovy = os.path.join(self.dir, "stream.h264")
+        TB.run("ffmpeg", ["-y", "-v", "error", "-i", self.zdroj, "-map", "0:v:0",
+                          "-c", "copy", "-bsf:v", "h264_mp4toannexb",
+                          "-f", "h264", surovy], log=None)
+        info = carve.parse_h264_sps(
+            carve.find_sps_in_annexb(carve.parameter_sets_anywhere(surovy)))
+        self.assertIsNotNone(info)
+        moje = carve.poradie_zobrazenia(surovy, info)
+        skutocne = self._poradie_z_kontajnera(self.zdroj)
+        self.assertEqual(len(moje), len(skutocne))
+        self.assertEqual(moje, skutocne)
+        self.assertNotEqual(moje, list(range(len(moje))),
+                            "ukážka má obsahovať B-snímky")
+
+    def test_doplnenie_do_hotoveho_suboru(self):
+        """Súbor bez poradia sa dá opraviť aj dodatočne, bez surového streamu."""
+        bez = os.path.join(self.dir, "bez_poradia.mp4")
+        surovy = os.path.join(self.dir, "s2.h264")
+        TB.run("ffmpeg", ["-y", "-v", "error", "-i", self.zdroj, "-map", "0:v:0",
+                          "-c", "copy", "-bsf:v", "h264_mp4toannexb",
+                          "-f", "h264", surovy], log=None)
+        TB.run("ffmpeg", ["-y", "-v", "error", "-r", "25", "-f", "h264",
+                          "-i", surovy, "-c", "copy", "-avoid_negative_ts",
+                          "disabled", "-movflags", "+faststart", bez], log=None)
+        povodne = self._poradie_z_kontajnera(bez)
+        self.assertEqual(povodne, list(range(len(povodne))),
+                         "takto zabalený súbor poradie obsahovať nemá")
+
+        v = oprav_poradie(bez, TB)
+        self.assertTrue(v["ok"], v.get("dovod"))
+        opravene = self._poradie_z_kontajnera(bez)
+        self.assertNotEqual(opravene, list(range(len(opravene))))
+        self.assertEqual(opravene, self._poradie_z_kontajnera(self.zdroj))
+
+    def test_druhy_pokus_nic_nepokazi(self):
+        v = oprav_poradie(self.zdroj, TB)
+        self.assertTrue(v["ok"])
+        self.assertTrue(v.get("preskocene"), "poradie tam už je, netreba nič meniť")
 
 
 @potrebuje_ffmpeg

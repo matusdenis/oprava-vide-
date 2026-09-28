@@ -23,7 +23,8 @@ from vidfix.analyze import (analyze, prehlad_priecinka,      # noqa: E402
                             rozbor, skontroluj_vysledok)
 from vidfix.headerdb import HeaderDB                # noqa: E402
 from vidfix.repair import (Ctx, STRATEGIE, najdi_medzikroky,  # noqa: E402
-                           najdi_videa, over_vystup, spusti,
+                           najdi_videa, oprav_poradie, over_vystup,
+                           spusti,
                            spusti_davku)
 from vidfix.tools import Toolbox                    # noqa: E402
 from vidfix.util import human, najdi_cestu          # noqa: E402
@@ -194,6 +195,30 @@ def prikaz_rozbor(args) -> int:
         return 2
     rozbor(subor, HeaderDB(), Toolbox(), log=lambda m: print(m, flush=True))
     return 0
+
+
+def prikaz_poradie(args) -> int:
+    """Doplní poradie zobrazenia snímkov do už opravených videí."""
+    tb = Toolbox()
+    if not tb.path("ffmpeg"):
+        print("Potrebný je ffmpeg.", file=sys.stderr)
+        return 2
+    hotove = preskocene = zlyhane = 0
+    for zadane in args.subor:
+        cesta = _over_cestu(zadane)
+        if not cesta:
+            zlyhane += 1
+            continue
+        v = oprav_poradie(cesta, tb, log=lambda m: print(m, flush=True))
+        if v.get("preskocene"):
+            preskocene += 1
+        elif v["ok"]:
+            hotove += 1
+        else:
+            zlyhane += 1
+            print(f"  {v['subor']}: {v.get('dovod')}", file=sys.stderr)
+    print(f"\nDoplnené: {hotove}, už v poriadku: {preskocene}, zlyhalo: {zlyhane}")
+    return 1 if zlyhane else 0
 
 
 def prikaz_kontrola(args) -> int:
@@ -402,6 +427,11 @@ def main(argv=None) -> int:
                     help="len precitat index: rozlisenie a frekvencia. "
                          "O tom, ci sa obraz da zobrazit, nehovori nic")
 
+    pp = pod.add_parser("poradie",
+                        help="doplni poradie zobrazenia do uz opravenych videi "
+                             "(rieši sekanie v strihovych programoch)")
+    pp.add_argument("subor", nargs="+")
+
     pu = pod.add_parser("uprac", help="zmaze medzisubory, ku ktorym uz je hotovy vysledok")
     pu.add_argument("priecinok")
     pu.add_argument("--naozaj", action="store_true",
@@ -420,6 +450,8 @@ def main(argv=None) -> int:
         return prikaz_prehlad(args)
     if args.prikaz == "rozbor":
         return prikaz_rozbor(args)
+    if args.prikaz == "poradie":
+        return prikaz_poradie(args)
     if args.prikaz == "kontrola":
         return prikaz_kontrola(args)
     if args.prikaz == "uprac":

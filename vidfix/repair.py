@@ -416,6 +416,132 @@ def _vyber_start(ctx: Ctx, mm, size: int, hlavicky: list, hint: int = 0,
     return s_kotvami(zvysne[0])
 
 
+def _doplnit_poradie_zobrazenia(ctx: Ctx, raw: str, dst: str, hevc: bool,
+                                fps: int) -> bool:
+    """Dopise do hotoveho MP4 poradie zobrazenia snimkov.
+
+    Surovy stream casove znacky neobsahuje, takze ffmpeg ziadne poradie
+    zobrazenia zapisat nevie. Pri B-snimkoch sa vsak poradie dekodovania od
+    poradia zobrazenia lisi - v subore je I P B B P, na obrazovke ma byt
+    I B B P. Prehravac, ktory verí kontajneru (napriklad strihovy program),
+    potom ukazuje snimky poprehadzovane a vyzera to ako sekanie. VLC si poradie
+    dopocita sam z bitstreamu, preto v nom to iste video bezi spravne.
+
+    Poradie je zapisane v hlavicke kazdeho rezu, takze sa da precitat a doplnit.
+    Zatial len pre H.264; H.265 pocita poradie inak.
+    """
+    if hevc:
+        return False
+    try:
+        sps = carve.find_sps_in_annexb(carve.parameter_sets_anywhere(raw))
+        info = carve.parse_h264_sps(sps) if sps else None
+        if not info:
+            return False
+        miesta = carve.poradie_zobrazenia(raw, info)
+        if not miesta:
+            return False
+        # pripona musi zostat .mp4, inak ffmpeg nevie, do coho bali
+        docasny = dst + ".bezposunu.mp4"
+        # `moov` musi byt na konci suboru - inak by zapis tabulky posunul
+        # offsety dat a index by prestal sediet.
+        res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", dst,
+                                         "-c", "copy", "-avoid_negative_ts",
+                                         "disabled", docasny], log=None)
+        if res["code"] != 0 or not os.path.exists(docasny):
+            return False
+        delta = max(1, round(12800 / max(1, fps)))
+        if not mp4.doplnit_ctts(docasny, miesta, delta):
+            os.remove(docasny)
+            return False
+        res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", docasny,
+                                         "-c", "copy", "-movflags", "+faststart",
+                                         dst], log=None)
+        os.remove(docasny)
+        if res["code"] == 0:
+            ctx.log("Doplnené poradie zobrazenia snímkov — video pôjde plynulo aj "
+                    "v strihových programoch, nielen vo VLC.")
+            return True
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return False
+
+
+def oprav_poradie(cesta: str, toolbox, log=None) -> dict:
+    """Dopise poradie zobrazenia do UZ HOTOVEHO suboru.
+
+    Robi to iste ako pri zachrane, ale vychadza z hotoveho MP4 - surovy stream
+    uz k dispozicii byt nemusi. Vdaka tomu sa daju opravit aj subory z minulych
+    behov bez toho, aby sa cela zachrana robila znova.
+    """
+    log = log or (lambda m: None)
+    von = {"subor": os.path.basename(cesta), "cesta": cesta}
+    if not os.path.isfile(cesta):
+        return {**von, "ok": False, "dovod": "súbor neexistuje"}
+    try:
+        f, mm, size = mp4.open_mm(cesta)
+        try:
+            moov = mp4.moov_od_zaciatku(mm, size) or mp4.najdi_moov(mm, size)
+            if moov is None:
+                return {**von, "ok": False, "dovod": "index sa nenašiel"}
+            moov.children = mp4.parse_tree(mm, moov.data_offset, moov.end, size)
+            stopa = next((t for t in mp4.parse_tracks(mm, moov, size)
+                          if t.handler == "vide"), None)
+        finally:
+            mm.close()
+            f.close()
+        if stopa is None:
+            return {**von, "ok": False, "dovod": "obrazová stopa sa nenašla"}
+        if stopa.ctts:
+            return {**von, "ok": True, "preskocene": True,
+                    "dovod": "poradie zobrazenia už v súbore je"}
+        if not stopa.codec.startswith("avc"):
+            return {**von, "ok": False,
+                    "dovod": f"zatiaľ len pre H.264 (tento je {stopa.codec})"}
+
+        surovy = cesta + ".stream.h264"
+        res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", cesta, "-map", "0:v:0",
+                                     "-c", "copy", "-bsf:v", "h264_mp4toannexb",
+                                     "-f", "h264", surovy], log=None)
+        if res["code"] != 0 or not os.path.exists(surovy):
+            return {**von, "ok": False, "dovod": "stream sa nepodarilo vybrať"}
+        try:
+            info = carve.parse_h264_sps(
+                carve.find_sps_in_annexb(carve.parameter_sets_anywhere(surovy)))
+            miesta = carve.poradie_zobrazenia(surovy, info) if info else []
+        finally:
+            os.remove(surovy)
+        if not miesta:
+            return {**von, "ok": False, "dovod": "poradie sa z bitstreamu nedá prečítať"}
+
+        delta = stopa.stts[0][1] if stopa.stts else 0
+        if not delta:
+            return {**von, "ok": False, "dovod": "neznáma dĺžka snímku"}
+
+        docasny = cesta + ".bezposunu.mp4"
+        res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", cesta, "-c", "copy",
+                                     "-avoid_negative_ts", "disabled", docasny],
+                          log=None)
+        if res["code"] != 0 or not os.path.exists(docasny):
+            return {**von, "ok": False, "dovod": "prebalenie zlyhalo"}
+        if not mp4.doplnit_ctts(docasny, miesta, delta):
+            os.remove(docasny)
+            return {**von, "ok": False, "dovod": "tabuľku sa nepodarilo zapísať"}
+        hotovy = cesta + ".nove.mp4"
+        res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", docasny, "-c", "copy",
+                                     "-movflags", "+faststart", hotovy], log=None)
+        os.remove(docasny)
+        if res["code"] != 0 or not os.path.exists(hotovy):
+            if os.path.exists(hotovy):
+                os.remove(hotovy)
+            return {**von, "ok": False, "dovod": "zápis výsledku zlyhal"}
+        os.replace(hotovy, cesta)
+        log(f"  {os.path.basename(cesta)}: doplnené poradie zobrazenia "
+            f"({len(miesta)} snímkov)")
+        return {**von, "ok": True, "snimky": len(miesta)}
+    except (OSError, ValueError, RuntimeError) as exc:
+        return {**von, "ok": False, "dovod": str(exc)}
+
+
 def _do_mp4(ctx: Ctx, raw: str, dst: str, hevc: bool, fps: int) -> dict | None:
     """Zabalí surový obrazový stream do MP4, aby sa dal normálne prehrať.
 
@@ -435,6 +561,7 @@ def _do_mp4(ctx: Ctx, raw: str, dst: str, hevc: bool, fps: int) -> dict | None:
     res = ctx.toolbox.run("ffmpeg", ["-y", "-v", "error"] + vstup
                           + ["-c", "copy", "-movflags", "+faststart", dst], log=None)
     if res["code"] == 0 and os.path.exists(dst) and os.path.getsize(dst) > 65536:
+        _doplnit_poradie_zobrazenia(ctx, raw, dst, hevc, fps)
         return {"cesta": dst, "popis": f"Zachránené video ({fps} snímkov/s, "
                                        f"bez straty kvality)"}
     if os.path.exists(dst):
