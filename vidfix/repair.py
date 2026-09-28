@@ -477,7 +477,33 @@ def _doplnit_poradie_zobrazenia(ctx: Ctx, raw: str, dst: str, hevc: bool,
     return False
 
 
-def oprav_poradie(cesta: str, toolbox, log=None) -> dict:
+def _prepis_tabulku(cesta: str, toolbox, von: dict, miesta, delta: int, log,
+                    hlaska: str, prepisat: bool = False) -> dict:
+    """Prepise tabulku poradia v hotovom subore a zachova rychle otvaranie."""
+    docasny = cesta + ".bezposunu.mp4"
+    res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", cesta, "-c", "copy",
+                                 "-avoid_negative_ts", "disabled", docasny], log=None)
+    if res["code"] != 0 or not os.path.exists(docasny):
+        return {**von, "ok": False, "dovod": "prebalenie zlyhalo"}
+    if not mp4.doplnit_ctts(docasny, miesta, delta, prepisat=True if miesta is None
+                            else prepisat):
+        os.remove(docasny)
+        return {**von, "ok": False, "dovod": "tabuľku sa nepodarilo zapísať"}
+    hotovy = cesta + ".nove.mp4"
+    res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", docasny, "-c", "copy",
+                                 "-movflags", "+faststart", hotovy], log=None)
+    os.remove(docasny)
+    if res["code"] != 0 or not os.path.exists(hotovy):
+        if os.path.exists(hotovy):
+            os.remove(hotovy)
+        return {**von, "ok": False, "dovod": "zápis výsledku zlyhal"}
+    os.replace(hotovy, cesta)
+    log(f"  {os.path.basename(cesta)}: {hlaska}")
+    return {**von, "ok": True, "snimky": len(miesta or [])}
+
+
+def oprav_poradie(cesta: str, toolbox, log=None, prepisat: bool = False,
+                  odstranit: bool = False) -> dict:
     """Dopise poradie zobrazenia do UZ HOTOVEHO suboru.
 
     Robi to iste ako pri zachrane, ale vychadza z hotoveho MP4 - surovy stream
@@ -502,9 +528,15 @@ def oprav_poradie(cesta: str, toolbox, log=None) -> dict:
             f.close()
         if stopa is None:
             return {**von, "ok": False, "dovod": "obrazová stopa sa nenašla"}
-        if stopa.ctts:
+        if stopa.ctts and not (prepisat or odstranit):
             return {**von, "ok": True, "preskocene": True,
                     "dovod": "poradie zobrazenia už v súbore je"}
+        if odstranit and not stopa.ctts:
+            return {**von, "ok": True, "preskocene": True,
+                    "dovod": "žiadne poradie v súbore nie je"}
+        if odstranit:
+            return _prepis_tabulku(cesta, toolbox, von, None, 0, log,
+                                   "odstránené poradie zobrazenia")
         hevc = stopa.codec.startswith(("hvc", "hev"))
         if not hevc and not stopa.codec.startswith("avc"):
             return {**von, "ok": False,
@@ -524,31 +556,17 @@ def oprav_poradie(cesta: str, toolbox, log=None) -> dict:
         if not miesta:
             return {**von, "ok": False, "dovod": "poradie sa z bitstreamu nedá prečítať"}
 
-        delta = stopa.stts[0][1] if stopa.stts else 0
-        if not delta:
-            return {**von, "ok": False, "dovod": "neznáma dĺžka snímku"}
-
-        docasny = cesta + ".bezposunu.mp4"
-        res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", cesta, "-c", "copy",
-                                     "-avoid_negative_ts", "disabled", docasny],
-                          log=None)
-        if res["code"] != 0 or not os.path.exists(docasny):
-            return {**von, "ok": False, "dovod": "prebalenie zlyhalo"}
-        if not mp4.doplnit_ctts(docasny, miesta, delta):
-            os.remove(docasny)
-            return {**von, "ok": False, "dovod": "tabuľku sa nepodarilo zapísať"}
-        hotovy = cesta + ".nove.mp4"
-        res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", docasny, "-c", "copy",
-                                     "-movflags", "+faststart", hotovy], log=None)
-        os.remove(docasny)
-        if res["code"] != 0 or not os.path.exists(hotovy):
-            if os.path.exists(hotovy):
-                os.remove(hotovy)
-            return {**von, "ok": False, "dovod": "zápis výsledku zlyhal"}
-        os.replace(hotovy, cesta)
-        log(f"  {os.path.basename(cesta)}: doplnené poradie zobrazenia "
-            f"({len(miesta)} snímkov)")
-        return {**von, "ok": True, "snimky": len(miesta)}
+        vzoriek = stopa.sample_count or len(stopa.sample_sizes)
+        if len(miesta) != vzoriek:
+            return {**von, "ok": False,
+                    "dovod": f"počet snímkov nesedí ({len(miesta)} v streame, "
+                             f"{vzoriek} v indexe) — nezapisujem nič"}
+        delta, podiel = mp4.prevazujuci_krok(stopa.stts)
+        if not delta or podiel < 0.9:
+            return {**von, "ok": False, "dovod": "nerovnomerne dlhé snímky"}
+        return _prepis_tabulku(cesta, toolbox, von, miesta, delta, log,
+                               f"doplnené poradie zobrazenia ({len(miesta)} snímkov)",
+                               prepisat=prepisat)
     except (OSError, ValueError, RuntimeError) as exc:
         return {**von, "ok": False, "dovod": str(exc)}
 

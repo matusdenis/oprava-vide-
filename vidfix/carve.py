@@ -986,7 +986,8 @@ def poc_rezu(nal: bytes, sps: dict, predchadzajuce: dict) -> int | None:
     ref_idc = (nal[0] >> 5) & 3
     try:
         r = _BitReader(_unescape(nal[1:40]))
-        r.ue()                          # first_mb_in_slice
+        if r.ue() != 0:
+            return None                 # dalsi rez toho isteho snimku
         r.ue()                          # slice_type
         r.ue()                          # pic_parameter_set_id
         r.bits(sps["log2_max_frame_num"])

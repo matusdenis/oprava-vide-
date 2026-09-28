@@ -683,6 +683,43 @@ class TestPoradieZobrazenia(unittest.TestCase):
         self.assertTrue(v["ok"])
         self.assertTrue(v.get("preskocene"), "poradie tam už je, netreba nič meniť")
 
+    def test_nesediaci_pocet_snimkov_nezapise_nic(self):
+        """Zle priradená tabuľka by video rozhádzala — radšej sa nezapíše nič."""
+        bez = os.path.join(self.dir, "pocet.mp4")
+        shutil.copy(self.zdroj, bez)
+        f, mm, size = mp4.open_mm(bez)
+        try:
+            moov = mp4.moov_od_zaciatku(mm, size) or mp4.najdi_moov(mm, size)
+            moov.children = mp4.parse_tree(mm, moov.data_offset, moov.end, size)
+            stopa = next(t for t in mp4.parse_tracks(mm, moov, size)
+                         if t.handler == "vide")
+            vzoriek = stopa.sample_count or len(stopa.sample_sizes)
+        finally:
+            mm.close()
+            f.close()
+        # o jeden snímok viac, než súbor obsahuje
+        self.assertFalse(mp4.doplnit_ctts(bez, list(range(vzoriek + 1)), 256,
+                                          prepisat=True))
+
+    def test_tabulku_sa_da_odstranit(self):
+        """Keď sa niečo pokazí, musí sa dať vrátiť súbor do pôvodného stavu."""
+        kopia = os.path.join(self.dir, "spat.mp4")
+        surovy = os.path.join(self.dir, "spat.h264")
+        TB.run("ffmpeg", ["-y", "-v", "error", "-i", self.zdroj, "-map", "0:v:0",
+                          "-c", "copy", "-bsf:v", "h264_mp4toannexb",
+                          "-f", "h264", surovy], log=None)
+        TB.run("ffmpeg", ["-y", "-v", "error", "-r", "25", "-f", "h264",
+                          "-i", surovy, "-c", "copy", "-avoid_negative_ts",
+                          "disabled", "-movflags", "+faststart", kopia], log=None)
+        povodne = self._poradie_z_kontajnera(kopia)
+        self.assertTrue(oprav_poradie(kopia, TB)["ok"])
+        self.assertNotEqual(self._poradie_z_kontajnera(kopia), povodne)
+        self.assertTrue(oprav_poradie(kopia, TB, odstranit=True)["ok"])
+        self.assertEqual(self._poradie_z_kontajnera(kopia), povodne,
+                         "po odstránení má byť súbor ako predtým")
+        # a musí sa dať doplniť znova
+        self.assertTrue(oprav_poradie(kopia, TB)["ok"])
+
     def test_h265_ma_vlastnu_pyramidu_b_snimkov(self):
         """H.265 počíta poradie inak a používa zložitejšiu pyramídu B-snímkov."""
         zdroj = os.path.join(self.dir, "h265.mp4")

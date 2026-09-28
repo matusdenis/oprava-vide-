@@ -792,23 +792,119 @@ def _najdi_box(boxy: list, *cesta: bytes):
     return box
 
 
-def doplnit_ctts(cesta: str, miesta: list, delta: int) -> bool:
+def doplnit_ctts(cesta: str, miesta: list | None, delta: int,
+                 prepisat: bool = False) -> bool:
     """Zapise do MP4 tabulku `ctts` - poradie zobrazenia snimkov.
 
-    Surovy H.264 stream casove znacky neobsahuje, takze ffmpeg pri baleni ziadne
-    poradie zobrazenia zapisat nevie. Pri B-snimkoch sa vsak poradie dekodovania
-    od poradia zobrazenia lisi a prehravac, ktory veri kontajneru, ukazuje snimky
-    poprehadzovane - vyzera to ako sekanie.
+    Surovy H.264/H.265 stream casove znacky neobsahuje, takze ffmpeg pri baleni
+    ziadne poradie zobrazenia zapisat nevie. Pri B-snimkoch sa vsak poradie
+    dekodovania od poradia zobrazenia lisi a prehravac, ktory veri kontajneru,
+    ukazuje snimky poprehadzovane.
 
-    `miesta[i]` hovori, kolkaty v poradi zobrazenia je snimok dekodovany ako i-ty.
-    Tabulka sa vklada do uz hotoveho suboru; `moov` musi byt na jeho KONCI, inak
-    by sa posunuli offsety dat. Vracia True, ked sa zapis podaril.
+    `miesta[i]` hovori, kolky v poradi zobrazenia je snimok dekodovany ako i-ty.
+    `miesta=None` znamena tabulku odstranit a vratit subor do povodneho stavu.
+
+    Pocet miest MUSI sediet s poctom vzoriek v stope. Ked nesedi, tabulka by
+    snimkom priradila cudzie posuny a video by zacalo skakat - vtedy sa radsej
+    nezapise nic. `moov` musi byt na KONCI suboru, inak by sa posunuli offsety
+    dat. Vracia True, ked sa subor zmenil.
     """
+    f, mm, size = open_mm(cesta)
+    try:
+        boxy, _ = chain_from(mm, 0, size)
+        moov = next((b for b in boxy if b.type == b"moov"), None)
+        if moov is None or moov.end != size:
+            return False                # `moov` musi byt na konci suboru
+        moov.children = parse_tree(mm, moov.data_offset, moov.end, size)
+        stbl = predkovia = stopa = None
+        for trak in [c for c in moov.children if c.type == b"trak"]:
+            hdlr = _najdi_box(trak.children, b"mdia", b"hdlr")
+            if hdlr is None:
+                continue
+            d = _read(mm, hdlr.data_offset, min(hdlr.data_size, 24))
+            if len(d) < 12 or d[8:12] != b"vide":
+                continue
+            stbl = _najdi_box(trak.children, b"mdia", b"minf", b"stbl")
+            predkovia = [moov, trak,
+                         _najdi_box(trak.children, b"mdia"),
+                         _najdi_box(trak.children, b"mdia", b"minf"), stbl]
+            stopa = next((t for t in parse_tracks(mm, moov, size)
+                          if t.handler == "vide"), None)
+            break
+        if stbl is None or stopa is None or any(b is None for b in predkovia):
+            return False
+        if any(b.size in (0, 1) for b in predkovia):
+            return False                # 64-bitove boxy nepodporujeme
+        stary = next((b for b in stbl.children if b.type == b"ctts"), None)
+        if stary is not None and not prepisat and miesta is not None:
+            return False                # uz ju tam ffmpeg zapisal
+        stts = next((b for b in stbl.children if b.type == b"stts"), None)
+        if stts is None:
+            return False
+
+        novy_box = b""
+        if miesta is not None:
+            vzoriek = stopa.sample_count or len(stopa.sample_sizes)
+            if not vzoriek or len(miesta) != vzoriek:
+                return False            # nesedi pocet - radsej nic nezapisovat
+            krok, podiel = prevazujuci_krok(stopa.stts)
+            if not krok or podiel < 0.9:
+                return False            # nerovnomerne dlhe snimky nevieme
+            novy_box = _ctts_box(miesta, delta)
+            if not novy_box:
+                return False            # bez B-snimkov nie je co zapisovat
+
+        data = bytes(mm[moov.offset:moov.end])
+        zac = moov.offset
+        if stary is not None:
+            vyrez = (stary.offset - zac, stary.end - zac)
+        else:
+            vyrez = (stts.end - zac, stts.end - zac)
+        stare_offsety = [b.offset - zac for b in predkovia]
+        stara_dlzka = vyrez[1] - vyrez[0]
+    finally:
+        mm.close()
+        f.close()
+
+    if not novy_box and stary is None:
+        return False                    # niet co menit
+    rozdiel = len(novy_box) - stara_dlzka
+    upraveny = bytearray(data[:vyrez[0]] + novy_box + data[vyrez[1]:])
+    for rel in stare_offsety:           # nadradenym boxom sa zmeni velkost
+        nova = struct.unpack(">I", upraveny[rel:rel + 4])[0] + rozdiel
+        if not 8 <= nova <= 0xFFFFFFFF:
+            return False
+        upraveny[rel:rel + 4] = struct.pack(">I", nova)
+
+    with open(cesta, "r+b") as fo:
+        fo.seek(zac)
+        fo.write(upraveny)
+        fo.truncate()
+    return True
+
+
+def prevazujuci_krok(stts: list) -> tuple:
+    """Vrati najcastejsiu dlzku snimku a aku cast zaznamu pokryva.
+
+    Posledny snimok mieva dlzku inu - ffmpeg ju pri prebaleni dopocita z casov.
+    Jedna taka odchylka nesmie brat moznost poradie zapisat, preto sa berie
+    prevazujuca hodnota, nie jedina.
+    """
+    vahy = {}
+    for pocet, delta in stts:
+        if delta > 0:
+            vahy[delta] = vahy.get(delta, 0) + pocet
+    if not vahy:
+        return 0, 0.0
+    delta = max(vahy, key=vahy.get)
+    return delta, vahy[delta] / sum(vahy.values())
+
+
+def _ctts_box(miesta: list, delta: int) -> bytes:
+    """Zostavi box `ctts` z poradia zobrazenia."""
     posuny = [(m - i) * delta for i, m in enumerate(miesta)]
     if not any(posuny):
-        return False                    # bez B-snimkov nie je co zapisovat
-
-    # zbalenie do usekov (pocet, posun)
+        return b""                      # bez B-snimkov je tabulka zbytocna
     useky = []
     for p in posuny:
         if useky and useky[-1][1] == p:
@@ -819,54 +915,7 @@ def doplnit_ctts(cesta: str, miesta: list, delta: int) -> bool:
     telo = struct.pack(">BBBBI", 1 if zaporny else 0, 0, 0, 0, len(useky))
     for pocet, posun in useky:
         telo += struct.pack(">Ii" if zaporny else ">II", pocet, posun)
-    novy_box = box(b"ctts", telo)
-
-    f, mm, size = open_mm(cesta)
-    try:
-        boxy, _ = chain_from(mm, 0, size)
-        moov = next((b for b in boxy if b.type == b"moov"), None)
-        if moov is None or moov.end != size:
-            return False                # `moov` musi byt na konci suboru
-        moov.children = parse_tree(mm, moov.data_offset, moov.end, size)
-        stbl = predkovia = None
-        for trak in [c for c in moov.children if c.type == b"trak"]:
-            hdlr = _najdi_box(trak.children, b"mdia", b"hdlr")
-            if hdlr is None:
-                continue
-            d = _read(mm, hdlr.data_offset, min(hdlr.data_size, 24))
-            if len(d) < 12 or d[8:12] != b"vide":
-                continue
-            mdia = _najdi_box(trak.children, b"mdia")
-            minf = _najdi_box(trak.children, b"mdia", b"minf")
-            stbl = _najdi_box(trak.children, b"mdia", b"minf", b"stbl")
-            predkovia = [moov, trak, mdia, minf, stbl]
-            break
-        if stbl is None or any(b is None for b in predkovia):
-            return False
-        if any(b.type == b"ctts" for b in stbl.children):
-            return False                # uz ju tam ffmpeg zapisal
-        stts = next((b for b in stbl.children if b.type == b"stts"), None)
-        if stts is None or any(b.size == 0 or b.size == 1 for b in predkovia):
-            return False
-        data = bytes(mm[moov.offset:moov.end])
-        vloz = stts.end - moov.offset
-    finally:
-        mm.close()
-        f.close()
-
-    upraveny = bytearray(data[:vloz] + novy_box + data[vloz:])
-    for b in predkovia:                 # kazdemu nadradenemu boxu narastie velkost
-        rel = b.offset - moov.offset
-        nova = struct.unpack(">I", upraveny[rel:rel + 4])[0] + len(novy_box)
-        if nova > 0xFFFFFFFF:
-            return False
-        upraveny[rel:rel + 4] = struct.pack(">I", nova)
-
-    with open(cesta, "r+b") as fo:
-        fo.seek(moov.offset)
-        fo.write(upraveny)
-        fo.truncate()
-    return True
+    return box(b"ctts", telo)
 
 
 def moov_od_zaciatku(mm, size: int):

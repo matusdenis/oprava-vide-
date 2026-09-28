@@ -209,7 +209,8 @@ def prikaz_poradie(args) -> int:
         if not cesta:
             zlyhane += 1
             continue
-        v = oprav_poradie(cesta, tb, log=lambda m: print(m, flush=True))
+        v = oprav_poradie(cesta, tb, log=lambda m: print(m, flush=True),
+                          prepisat=args.prepisat, odstranit=args.odstranit)
         if v.get("preskocene"):
             preskocene += 1
         elif v["ok"]:
@@ -431,6 +432,11 @@ def main(argv=None) -> int:
                         help="doplni poradie zobrazenia do uz opravenych videi "
                              "(rieši sekanie v strihovych programoch)")
     pp.add_argument("subor", nargs="+")
+    pp.add_argument("--prepisat", action="store_true",
+                    help="prepisat poradie aj tam, kde uz nejake je")
+    pp.add_argument("--odstranit", action="store_true",
+                    help="tabulku poradia odstranit a vratit subor do "
+                         "povodneho stavu")
 
     pu = pod.add_parser("uprac", help="zmaze medzisubory, ku ktorym uz je hotovy vysledok")
     pu.add_argument("priecinok")
