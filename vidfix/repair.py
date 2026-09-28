@@ -581,9 +581,14 @@ def oprav_poradie(cesta: str, toolbox, log=None, prepisat: bool = False,
             return {**von, "ok": False,
                     "dovod": f"počet snímkov nesedí ({len(miesta)} v streame, "
                              f"{vzoriek} v indexe) — nezapisujem nič"}
-        delta, podiel = mp4.prevazujuci_krok(stopa.stts)
-        if not delta or podiel < 0.9:
-            return {**von, "ok": False, "dovod": "nerovnomerne dlhé snímky"}
+        if miesta == list(range(len(miesta))):
+            # Zaznam bez preusporiadanych snimkov - poradie zobrazenia je
+            # zhodne s poradim dekodovania a tabulka by bola samych nul.
+            # Bezne pri tokoch MPEG-TS z videokamier.
+            return {**von, "ok": True, "preskocene": True,
+                    "dovod": "video nemá preusporiadané snímky, tabuľku "
+                             "nepotrebuje"}
+        delta, _podiel = mp4.prevazujuci_krok(stopa.stts)
         return _prepis_tabulku(cesta, toolbox, von, miesta, delta, log,
                                f"doplnené poradie zobrazenia ({len(miesta)} snímkov)",
                                prepisat=prepisat)

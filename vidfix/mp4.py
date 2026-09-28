@@ -847,10 +847,13 @@ def doplnit_ctts(cesta: str, miesta: list | None, delta: int,
             vzoriek = stopa.sample_count or len(stopa.sample_sizes)
             if not vzoriek or len(miesta) != vzoriek:
                 return False            # nesedi pocet - radsej nic nezapisovat
-            krok, podiel = prevazujuci_krok(stopa.stts)
-            if not krok or podiel < 0.9:
-                return False            # nerovnomerne dlhe snimky nevieme
-            novy_box = _ctts_box(miesta, delta)
+            casy = casy_dekodovania(stopa.stts, vzoriek)
+            if len(casy) != vzoriek:
+                # Zaloha, ked su tabulky neuplne: rovnomerne dlhe snimky.
+                if not delta:
+                    return False
+                casy = [i * delta for i in range(vzoriek)]
+            novy_box = _ctts_box(miesta, casy)
             if not novy_box:
                 return False            # bez B-snimkov nie je co zapisovat
 
@@ -900,9 +903,29 @@ def prevazujuci_krok(stts: list) -> tuple:
     return delta, vahy[delta] / sum(vahy.values())
 
 
-def _ctts_box(miesta: list, delta: int) -> bytes:
-    """Zostavi box `ctts` z poradia zobrazenia."""
-    posuny = [(m - i) * delta for i, m in enumerate(miesta)]
+def casy_dekodovania(stts: list, limit: int) -> list:
+    """Z tabulky `stts` vyrata cas zaciatku kazdej vzorky."""
+    casy = []
+    cas = 0
+    for pocet, dlzka in stts:
+        for _ in range(min(pocet, limit - len(casy))):
+            casy.append(cas)
+            cas += dlzka
+        if len(casy) >= limit:
+            break
+    return casy
+
+
+def _ctts_box(miesta: list, casy: list) -> bytes:
+    """Zostavi box `ctts` z poradia zobrazenia.
+
+    Posun snimku je rozdiel medzi casom, kedy sa ma zobrazit, a casom, kedy sa
+    dekoduje. Mnozina casov je v oboch poradiach rovnaka, len inak zoradena -
+    staci teda siahnut na cas toho miesta, kam snimok v zobrazeni patri. Takto
+    to vyjde aj pri zaznamoch, kde snimky rovnako dlhe nie su (napriklad z toku
+    MPEG-TS).
+    """
+    posuny = [casy[m] - casy[i] for i, m in enumerate(miesta)]
     if not any(posuny):
         return b""                      # bez B-snimkov je tabulka zbytocna
     useky = []

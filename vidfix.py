@@ -218,12 +218,14 @@ def prikaz_poradie(args) -> int:
                           prepisat=args.prepisat, odstranit=args.odstranit)
         if v.get("preskocene"):
             preskocene += 1
+            print(f"  {v['subor']}: {v.get('dovod')}")
         elif v["ok"]:
             hotove += 1
         else:
             zlyhane += 1
             print(f"  {v['subor']}: {v.get('dovod')}", file=sys.stderr)
-    print(f"\nDoplnené: {hotove}, už v poriadku: {preskocene}, zlyhalo: {zlyhane}")
+    print(f"\nDoplnené: {hotove}, netreba meniť: {preskocene}, "
+          f"zlyhalo: {zlyhane}")
     return 1 if zlyhane else 0
 
 
