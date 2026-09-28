@@ -477,29 +477,49 @@ def _doplnit_poradie_zobrazenia(ctx: Ctx, raw: str, dst: str, hevc: bool,
     return False
 
 
+# Pripony medzikrokov prikazu `poradie`. Su zamerne rozpoznatelne, aby sa dali
+# preskocit, ked ich do prikazu zahrnie hviezdicka, a upratat, ak po preruseni
+# beh nedokoncil.
+MEDZIKROKY_PORADIA = (".bezposunu.mp4", ".nove.mp4")
+
+
+def je_medzikrok_poradia(cesta: str) -> bool:
+    return cesta.endswith(MEDZIKROKY_PORADIA)
+
+
+def _uprac(*cesty) -> None:
+    for c in cesty:
+        try:
+            os.remove(c)
+        except OSError:
+            pass
+
+
 def _prepis_tabulku(cesta: str, toolbox, von: dict, miesta, delta: int, log,
                     hlaska: str, prepisat: bool = False) -> dict:
     """Prepise tabulku poradia v hotovom subore a zachova rychle otvaranie."""
     docasny = cesta + ".bezposunu.mp4"
-    res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", cesta, "-c", "copy",
-                                 "-avoid_negative_ts", "disabled", docasny], log=None)
-    if res["code"] != 0 or not os.path.exists(docasny):
-        return {**von, "ok": False, "dovod": "prebalenie zlyhalo"}
-    if not mp4.doplnit_ctts(docasny, miesta, delta, prepisat=True if miesta is None
-                            else prepisat):
-        os.remove(docasny)
-        return {**von, "ok": False, "dovod": "tabuľku sa nepodarilo zapísať"}
     hotovy = cesta + ".nove.mp4"
-    res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", docasny, "-c", "copy",
-                                 "-movflags", "+faststart", hotovy], log=None)
-    os.remove(docasny)
-    if res["code"] != 0 or not os.path.exists(hotovy):
-        if os.path.exists(hotovy):
-            os.remove(hotovy)
-        return {**von, "ok": False, "dovod": "zápis výsledku zlyhal"}
-    os.replace(hotovy, cesta)
-    log(f"  {os.path.basename(cesta)}: {hlaska}")
-    return {**von, "ok": True, "snimky": len(miesta or [])}
+    try:
+        res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", cesta, "-c", "copy",
+                                     "-avoid_negative_ts", "disabled", docasny],
+                          log=None)
+        if res["code"] != 0 or not os.path.exists(docasny):
+            return {**von, "ok": False, "dovod": "prebalenie zlyhalo"}
+        if not mp4.doplnit_ctts(docasny, miesta, delta,
+                                prepisat=True if miesta is None else prepisat):
+            return {**von, "ok": False, "dovod": "tabuľku sa nepodarilo zapísať"}
+        res = toolbox.run("ffmpeg", ["-y", "-v", "error", "-i", docasny, "-c", "copy",
+                                     "-movflags", "+faststart", hotovy], log=None)
+        if res["code"] != 0 or not os.path.exists(hotovy):
+            return {**von, "ok": False, "dovod": "zápis výsledku zlyhal"}
+        os.replace(hotovy, cesta)
+        log(f"  {os.path.basename(cesta)}: {hlaska}")
+        return {**von, "ok": True, "snimky": len(miesta or [])}
+    finally:
+        # Medzikroky su rovnako velke ako video - nesmu ostat lezat ani vtedy,
+        # ked sa nieco pokazi.
+        _uprac(docasny, hotovy)
 
 
 def oprav_poradie(cesta: str, toolbox, log=None, prepisat: bool = False,
@@ -552,7 +572,7 @@ def oprav_poradie(cesta: str, toolbox, log=None, prepisat: bool = False,
         try:
             miesta = _poradie_zo_streamu(surovy, hevc)
         finally:
-            os.remove(surovy)
+            _uprac(surovy)
         if not miesta:
             return {**von, "ok": False, "dovod": "poradie sa z bitstreamu nedá prečítať"}
 

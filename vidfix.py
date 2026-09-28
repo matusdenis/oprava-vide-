@@ -23,7 +23,8 @@ from vidfix.analyze import (analyze, prehlad_priecinka,      # noqa: E402
                             rozbor, skontroluj_vysledok)
 from vidfix.headerdb import HeaderDB                # noqa: E402
 from vidfix.repair import (Ctx, STRATEGIE, najdi_medzikroky,  # noqa: E402
-                           najdi_videa, oprav_poradie, over_vystup,
+                           je_medzikrok_poradia, najdi_videa,
+                           oprav_poradie, over_vystup,
                            spusti,
                            spusti_davku)
 from vidfix.tools import Toolbox                    # noqa: E402
@@ -205,6 +206,10 @@ def prikaz_poradie(args) -> int:
         return 2
     hotove = preskocene = zlyhane = 0
     for zadane in args.subor:
+        # Hviezdicka zachyti aj medzikroky, ktore program vyrobil - tie sa
+        # preskakuju, nie su to videa pouzivatela.
+        if je_medzikrok_poradia(str(zadane)):
+            continue
         cesta = _over_cestu(zadane)
         if not cesta:
             zlyhane += 1
